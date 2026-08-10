@@ -1,0 +1,1 @@
+{"id":"1710000005.1006","timestamp":"2026-08-09T12:01:40+00:00","rule":{"id":"100001","level":3,"description":"Minimal Wazuh alert","groups":[]},"manager":{"name":"wazuh-lab"}}

@@ -1,0 +1,55 @@
+# Env
+.env
+backend/storage/
+.env.local
+
+# Backend
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Frontend
+node_modules/
+.next/
+next-env.d.ts
+
+# OS
+.DS_Store
+
+# Archives / backups
+*.zip
+*.tar
+*.tar.gz
+
+# Logs / runtime
+*.log
+logs/
+tmp/
+temp/
+
+# Coverage / reports
+coverage/
+htmlcov/
+.coverage
+
+# Python environments
+.venv/
+venv/
+
+# Wazuh / forwarder runtime
+**/pending/
+**/quarantine/
+**/spool/
+
+# Local databases / dumps
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+*.dump
+
+# IDE
+.vscode/
+.idea/
+*.tsbuildinfo

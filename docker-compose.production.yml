@@ -1,0 +1,37 @@
+name: aegis-ai-production
+
+# Production deployment template. Supply all *_REQUIRED values through the
+# deployment secret manager; internal services deliberately have no host ports.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER_REQUIRED:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_REQUIRED:?required}
+      POSTGRES_DB: ${POSTGRES_DB_REQUIRED:?required}
+    volumes: [aegis_postgres_data:/var/lib/postgresql/data]
+    networks: [aegis_network]
+  redis:
+    image: redis:7-alpine
+    networks: [aegis_network]
+  ollama:
+    image: ollama/ollama:latest
+    volumes: [aegis_ollama_data:/root/.ollama]
+    networks: [aegis_network]
+  backend:
+    build: {context: ./backend, dockerfile: Dockerfile}
+    depends_on: [postgres, redis]
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      SEED_DEMO_DATA: "false"
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY_REQUIRED:?required}
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER_REQUIRED:?required}:${POSTGRES_PASSWORD_REQUIRED:?required}@postgres:5432/${POSTGRES_DB_REQUIRED:?required}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+    networks: [aegis_network]
+networks: {aegis_network: {driver: bridge}}
+volumes: {aegis_postgres_data: {}, aegis_ollama_data: {}}

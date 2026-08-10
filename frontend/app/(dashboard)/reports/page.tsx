@@ -1,0 +1,22 @@
+import Link from "next/link";
+import { Construction } from "lucide-react";
+
+export default function ReportsPage() {
+  return (
+    <div>
+      <h1 className="font-display text-xl font-medium text-text-primary">Reports</h1>
+      <div className="mt-6 flex flex-col items-center justify-center rounded-card border border-hairline bg-surface px-6 py-16 text-center">
+        <Construction size={28} className="mb-3 text-text-muted" aria-hidden />
+        <p className="text-sm text-text-primary">A dedicated report library isn&apos;t built yet</p>
+        <p className="mt-1 max-w-sm text-sm text-text-muted">
+          Executive and technical reports (PDF or Markdown) can already be generated from any
+          individual{" "}
+          <Link href="/investigations" className="text-signal hover:underline">
+            investigation
+          </Link>{" "}
+          — open one and use the report buttons near the top.
+        </p>
+      </div>
+    </div>
+  );
+}

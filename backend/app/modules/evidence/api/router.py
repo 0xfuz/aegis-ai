@@ -1,0 +1,149 @@
+from datetime import datetime, timezone
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi.responses import FileResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.modules.evidence.api.schemas import (
+    EntityRead, EntityRelationshipRead, EventRead, EvidenceDetail, EvidenceRead,
+    IndicatorOccurrenceRead, IndicatorRead, EntityObservationRead, RawRecordRead,
+)
+from app.modules.evidence.domain.service import EvidenceIngestionService
+from app.modules.evidence.infrastructure.models import AuditEvent, EvidenceItem, EvidenceParseRun
+from app.modules.evidence.infrastructure.repository import EvidenceRepository
+from app.modules.evidence.infrastructure.storage import EvidenceStorage
+from app.modules.evidence.domain.graph_projection import CanonicalGraphProjectionService, GraphFilters
+from app.modules.evidence.api.graph_schemas import CanonicalGraphRead
+from app.modules.identity.api.dependencies import Principal, require_permission
+from app.shared.database import get_db
+from app.shared.exceptions import NotFoundError
+
+router = APIRouter(prefix="/investigations", tags=["Canonical Evidence"])
+
+
+def _evidence(db: Session, principal: Principal, investigation_id: UUID, evidence_id: UUID):
+    evidence = EvidenceRepository(db).get_evidence(principal.org_id, investigation_id, evidence_id)
+    if evidence is None:
+        raise NotFoundError("Evidence not found.")
+    return evidence
+
+
+def _serialize_evidence(db: Session, evidence: EvidenceItem) -> EvidenceRead:
+    """Return public evidence metadata and the latest parser identity only."""
+    run = db.execute(
+        select(EvidenceParseRun)
+        .where(EvidenceParseRun.evidence_id == evidence.id)
+        .order_by(EvidenceParseRun.run_sequence.desc(), EvidenceParseRun.started_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return EvidenceRead(
+        id=evidence.id, investigation_id=evidence.investigation_id,
+        original_filename=evidence.original_filename, sha256=evidence.sha256,
+        byte_size=evidence.byte_size, detected_mime=evidence.detected_mime,
+        extension=evidence.extension, source_description=evidence.source_description,
+        acquisition_source=evidence.acquisition_source, imported_at=evidence.imported_at,
+        parsing_status=evidence.parsing_status,
+        parser_name=run.parser_name if run else None,
+        parser_version=run.parser_version if run else None,
+    )
+
+
+@router.post("/{investigation_id}/evidence", response_model=EvidenceRead, status_code=201)
+def upload_evidence(
+    investigation_id: UUID,
+    file: UploadFile = File(...),
+    principal: Principal = Depends(require_permission("investigation:write")),
+    db: Session = Depends(get_db),
+) -> EvidenceRead:
+    evidence = EvidenceIngestionService(db, get_settings()).ingest(principal.org_id, investigation_id, principal.user_id, file)
+    return _serialize_evidence(db, evidence)
+
+
+@router.get("/{investigation_id}/evidence", response_model=list[EvidenceRead])
+def list_evidence(
+    investigation_id: UUID,
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+) -> list[EvidenceRead]:
+    rows = db.execute(select(EvidenceItem).where(EvidenceItem.org_id == principal.org_id, EvidenceItem.investigation_id == investigation_id).order_by(EvidenceItem.imported_at.desc())).scalars()
+    return [_serialize_evidence(db, row) for row in rows]
+
+
+@router.get("/{investigation_id}/evidence/{evidence_id}", response_model=EvidenceDetail)
+def get_evidence(investigation_id: UUID, evidence_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> EvidenceDetail:
+    evidence = _evidence(db, principal, investigation_id, evidence_id)
+    return EvidenceDetail.model_validate(_serialize_evidence(db, evidence))
+
+
+@router.get("/{investigation_id}/evidence/{evidence_id}/download")
+def download_evidence(investigation_id: UUID, evidence_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> FileResponse:
+    evidence = _evidence(db, principal, investigation_id, evidence_id)
+    storage = EvidenceStorage(get_settings())
+    # Resolve via opaque DB key only after organization/investigation auth.
+    stream = storage.open_for_read(evidence.storage_key)
+    stream.close()
+    path = storage._path(evidence.storage_key)
+    db.add(AuditEvent(
+        org_id=principal.org_id, investigation_id=investigation_id, actor_id=principal.user_id,
+        actor_type="user", action="EVIDENCE_DOWNLOADED", target_type="EvidenceItem", target_id=evidence.id,
+        occurred_at=datetime.now(timezone.utc),
+    ))
+    db.commit()
+    return FileResponse(path, media_type="application/octet-stream", filename="evidence-download")
+
+
+@router.get("/{investigation_id}/evidence/{evidence_id}/raw-records", response_model=list[RawRecordRead])
+def list_raw_records(investigation_id: UUID, evidence_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[RawRecordRead]:
+    _evidence(db, principal, investigation_id, evidence_id)
+    return [RawRecordRead.model_validate(row) for row in EvidenceRepository(db).raw_records(principal.org_id, investigation_id, evidence_id)]
+
+
+@router.get("/{investigation_id}/events", response_model=list[EventRead])
+def list_events(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[EventRead]:
+    return [EventRead.model_validate(row) for row in EvidenceRepository(db).events(principal.org_id, investigation_id)]
+
+
+@router.get("/{investigation_id}/indicators", response_model=list[IndicatorRead])
+def list_indicators(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[IndicatorRead]:
+    return [IndicatorRead.model_validate(row) for row in EvidenceRepository(db).indicators(principal.org_id, investigation_id)]
+
+
+@router.get("/{investigation_id}/indicators/{indicator_id}/occurrences", response_model=list[IndicatorOccurrenceRead])
+def list_indicator_occurrences(investigation_id: UUID, indicator_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[IndicatorOccurrenceRead]:
+    return [IndicatorOccurrenceRead.model_validate(row) for row in EvidenceRepository(db).indicator_occurrences(principal.org_id, investigation_id, indicator_id)]
+
+
+@router.get("/{investigation_id}/entities", response_model=list[EntityRead])
+def list_entities(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[EntityRead]:
+    return [EntityRead.model_validate(row) for row in EvidenceRepository(db).entities(principal.org_id, investigation_id)]
+
+
+@router.get("/{investigation_id}/entities/{entity_id}/observations", response_model=list[EntityObservationRead])
+def list_entity_observations(investigation_id: UUID, entity_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[EntityObservationRead]:
+    return [EntityObservationRead.model_validate(row) for row in EvidenceRepository(db).entity_observations(principal.org_id, investigation_id, entity_id)]
+
+
+@router.get("/{investigation_id}/relationships", response_model=list[EntityRelationshipRead])
+def list_relationships(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[EntityRelationshipRead]:
+    return [EntityRelationshipRead.model_validate(row) for row in EvidenceRepository(db).relationships(principal.org_id, investigation_id)]
+
+
+@router.get("/{investigation_id}/graph", response_model=CanonicalGraphRead, tags=["Canonical Graph"])
+def get_canonical_graph(
+    investigation_id: UUID,
+    entity_type: str | None = Query(default=None),
+    relationship_type: str | None = Query(default=None),
+    evidence_id: UUID | None = Query(default=None),
+    start_at: datetime | None = Query(default=None),
+    end_at: datetime | None = Query(default=None),
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+) -> CanonicalGraphRead:
+    graph = CanonicalGraphProjectionService(db).project(
+        principal.org_id, investigation_id,
+        GraphFilters(entity_type, relationship_type, evidence_id, start_at, end_at),
+    )
+    return CanonicalGraphRead.model_validate(graph)

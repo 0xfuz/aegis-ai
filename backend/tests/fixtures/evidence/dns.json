@@ -1,0 +1,4 @@
+[
+  {"timestamp":"2026-08-07T08:00:00+00:00","host":"dns-1","query":"example.test","resolved_ip":"203.0.113.9","event_type":"dns"},
+  {"timestamp":"2026-08-07T08:01:00+00:00","host":"dns-1","query":"example.test","resolved_ip":"203.0.113.9","event_type":"dns"}
+]
