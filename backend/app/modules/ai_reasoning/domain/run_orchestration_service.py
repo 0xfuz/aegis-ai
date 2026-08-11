@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.modules.ai_reasoning.domain.context_builder import ContextBuilder
 from app.modules.ai_reasoning.domain.intelligence_contracts import validate_run_transition
@@ -28,6 +29,15 @@ class IntelligenceRunOrchestrationService:
         if actor is None or not self.db.scalar(select(User.id).where(User.id==actor,User.org_id==org,User.is_active.is_(True))): raise NotFoundError("Active analyst not found.")
     def _audit(self, org, inv, actor, action, row, previous, extra=None):
         self.db.add(AuditEvent(org_id=org,investigation_id=inv,actor_id=actor,actor_type="user" if actor else "system",action=action,target_type="IntelligenceAnalysis",target_id=row.id,occurred_at=datetime.now(timezone.utc),metadata_={"previous":previous,"status":row.status,"request_key":row.request_key,"input_hash":row.input_hash,**(extra or {})}))
+    def _commit(self):
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            raise ValidationError("Unable to persist intelligence run.") from None
+        except Exception:
+            self.db.rollback()
+            raise
     def queue(self, org: UUID, investigation: UUID, actor: UUID, request_key: str):
         self._actor(org,actor)
         InvestigationService(self.db).get_investigation(org,investigation)
@@ -37,22 +47,40 @@ class IntelligenceRunOrchestrationService:
             if existing.input_hash != snapshot.fingerprint: raise ValidationError("Request identity conflicts with a different context fingerprint.")
             return existing
         row=IntelligenceAnalysis(org_id=org,investigation_id=investigation,provider="pending",model="pending",prompt_template_version="aiie-facts-alias-v1",input_snapshot=snapshot.snapshot,input_hash=snapshot.fingerprint,request_key=request_key,output_schema_version="aiie-output-v1",status="QUEUED")
-        self.db.add(row);self.db.flush();self._audit(org,investigation,actor,"INTELLIGENCE_RUN_QUEUED",row,None);self.db.commit();return row
+        try:
+            self.db.add(row);self.db.flush();self._audit(org,investigation,actor,"INTELLIGENCE_RUN_QUEUED",row,None);self._commit();return row
+        except Exception:
+            self.db.rollback();raise
     def acquire(self, org: UUID, run_id: UUID):
-        row=self._run(org,run_id,True);validate_run_transition(row.status,"RUNNING");previous=row.status;row.status="RUNNING";self._audit(org,row.investigation_id,None,"INTELLIGENCE_RUN_ACQUIRED",row,previous);self.db.commit();return row
+        try:
+            row=self._run(org,run_id,True);validate_run_transition(row.status,"RUNNING");previous=row.status;row.status="RUNNING";self._audit(org,row.investigation_id,None,"INTELLIGENCE_RUN_ACQUIRED",row,previous);self._commit();return row
+        except Exception:
+            self.db.rollback();raise
     def complete(self, org: UUID, run_id: UUID):
-        row=self._run(org,run_id,True);validate_run_transition(row.status,"COMPLETED");previous=row.status;row.status="COMPLETED";row.generated_at=datetime.now(timezone.utc);self._audit(org,row.investigation_id,None,"INTELLIGENCE_RUN_COMPLETED",row,previous);self.db.commit();return row
+        try:
+            row=self._run(org,run_id,True);validate_run_transition(row.status,"COMPLETED");previous=row.status;row.status="COMPLETED";row.generated_at=datetime.now(timezone.utc);self._audit(org,row.investigation_id,None,"INTELLIGENCE_RUN_COMPLETED",row,previous);self._commit();return row
+        except Exception:
+            self.db.rollback();raise
     def fail(self, org: UUID, run_id: UUID, exc: Exception):
-        row=self._run(org,run_id,True);validate_run_transition(row.status,"FAILED");previous=row.status;row.status="FAILED";row.error_summary=safe_failure(exc);self._audit(org,row.investigation_id,None,"INTELLIGENCE_RUN_FAILED",row,previous,{"error_code":row.error_summary});self.db.commit();return row
+        try:
+            row=self._run(org,run_id,True);validate_run_transition(row.status,"FAILED");previous=row.status;row.status="FAILED";row.error_summary=safe_failure(exc);self._audit(org,row.investigation_id,None,"INTELLIGENCE_RUN_FAILED",row,previous,{"error_code":row.error_summary});self._commit();return row
+        except Exception:
+            self.db.rollback();raise
     def cancel(self, org: UUID, run_id: UUID, actor: UUID, reason: str=""):
         self._actor(org,actor)
-        row=self._run(org,run_id,True)
-        if row.status=="CANCELLED": return row
-        validate_run_transition(row.status,"CANCELLED");previous=row.status;row.status="CANCELLED";self._audit(org,row.investigation_id,actor,"INTELLIGENCE_RUN_CANCELLED",row,previous,{"reason":reason[:200]});self.db.commit();return row
+        try:
+            row=self._run(org,run_id,True)
+            if row.status=="CANCELLED": return row
+            validate_run_transition(row.status,"CANCELLED");previous=row.status;row.status="CANCELLED";self._audit(org,row.investigation_id,actor,"INTELLIGENCE_RUN_CANCELLED",row,previous,{"reason":reason[:200]});self._commit();return row
+        except Exception:
+            self.db.rollback();raise
     def retry(self, org: UUID, run_id: UUID, actor: UUID, request_key: str):
         self._actor(org,actor)
-        previous=self._run(org,run_id,True)
-        if previous.status not in {"FAILED","CANCELLED"}: raise ValidationError("Only failed or cancelled runs may be retried.")
-        snapshot=ContextBuilder(self.db).build(org,previous.investigation_id)
-        row=IntelligenceAnalysis(org_id=org,investigation_id=previous.investigation_id,provider=previous.provider,model=previous.model,prompt_template_version=previous.prompt_template_version,input_snapshot=snapshot.snapshot,input_hash=snapshot.fingerprint,request_key=request_key,output_schema_version=previous.output_schema_version,predecessor_analysis_id=previous.id,status="QUEUED")
-        self.db.add(row);self.db.flush();self._audit(org,row.investigation_id,actor,"INTELLIGENCE_RUN_RETRY_QUEUED",row,previous.status,{"predecessor_run_id":str(previous.id)});self.db.commit();return row
+        try:
+            previous=self._run(org,run_id,True)
+            if previous.status not in {"FAILED","CANCELLED"}: raise ValidationError("Only failed or cancelled runs may be retried.")
+            snapshot=ContextBuilder(self.db).build(org,previous.investigation_id)
+            row=IntelligenceAnalysis(org_id=org,investigation_id=previous.investigation_id,provider=previous.provider,model=previous.model,prompt_template_version=previous.prompt_template_version,input_snapshot=snapshot.snapshot,input_hash=snapshot.fingerprint,request_key=request_key,output_schema_version=previous.output_schema_version,predecessor_analysis_id=previous.id,status="QUEUED")
+            self.db.add(row);self.db.flush();self._audit(org,row.investigation_id,actor,"INTELLIGENCE_RUN_RETRY_QUEUED",row,previous.status,{"predecessor_run_id":str(previous.id)});self._commit();return row
+        except Exception:
+            self.db.rollback();raise
