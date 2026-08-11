@@ -33,6 +33,9 @@ Included Phase 8.1 commits include `0609f75`, `bc8a647`, `2ecf58d`,
 ## Validation record
 
 - Fresh PostgreSQL/Redis upgrade: `0019 -> 0020`; Alembic head `0020`.
+- Representative legacy backfill: a `0019` COMPLETED run retained its status,
+  received `legacy:<run-id>` and `aiie-output-v1`; a legacy AI item mapped
+  `UNREVIEWED` to `PENDING` while retaining origin `AI`.
 - Empty-state supported downgrade/upgrade round trip: `0020 -> 0019 -> 0020`
   passed.  A populated Phase 8 database intentionally rejects downgrade to
   prevent silent loss of Phase 8-only state.
