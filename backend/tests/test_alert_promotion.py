@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 
 from app.core.config import Settings
 from app.modules.ai_reasoning.infrastructure.intelligence_models import IntelligenceAnalysis
+from app.modules.ai_reasoning.domain.context_builder import ContextBuilder
 from app.modules.alert_triage.domain.correlation_service import AlertCorrelationService
 from app.modules.alert_triage.domain.correlation_v2_service import AlertCorrelationV2Service, CORRELATION_V2_VERSION
 from app.modules.alert_triage.domain.promotion_service import AlertClusterPromotionService, PROMOTION_EXPORT_VERSION
@@ -103,6 +104,20 @@ def test_promotion_reads_only_persisted_v2_memberships(db, tmp_path, monkeypatch
     assert {entry["membership_context"]["correlation_version"] for entry in promotion.manifest["members"]} == {CORRELATION_V2_VERSION}
     assert db.get(AlertClusterAssessment, assessment.id).ledger is not None
     assert [(m.id, m.score, m.reasons, m.correlation_version) for m in db.scalars(select(AlertClusterMembership).where(AlertClusterMembership.cluster_id == cluster.id))] == before
+
+
+def test_context_builder_reconstructs_promoted_v2_without_recalculation(db, tmp_path, monkeypatch):
+    org, user, connector = context(db); now = datetime(2026, 8, 9, 12, tzinfo=timezone.utc)
+    first=add_alert(db,org,connector,"ctx-v2-1",now,{"hostname":"ctx","username":"u","process":"p"});second=add_alert(db,org,connector,"ctx-v2-2",now+timedelta(seconds=10),{"hostname":"ctx","username":"u","process":"p"})
+    v2=AlertCorrelationV2Service(db);cluster=v2.process(org.id,first.id);cluster=v2.process(org.id,second.id);assessment=AlertClusterTriageService(db).assess(org.id,cluster.id,now+timedelta(minutes=30));promotion=service(db,tmp_path).promote(org.id,cluster.id,user.id)
+    before=[(m.id,m.score,m.reasons,m.correlation_version) for m in db.scalars(select(AlertClusterMembership).where(AlertClusterMembership.cluster_id==cluster.id))]
+    monkeypatch.setattr(AlertCorrelationV2Service,"process",lambda *_: (_ for _ in ()).throw(AssertionError("recalculation")));monkeypatch.setattr(AlertClusterTriageService,"assess",lambda *_: (_ for _ in ()).throw(AssertionError("retriage")))
+    snapshot=ContextBuilder(db).build(org.id,promotion.investigation_id).snapshot
+    assert snapshot["investigation_id"]==str(promotion.investigation_id) and snapshot["triage"]["score"]==assessment.score
+    assert snapshot["triage"]["priority"]==assessment.priority and snapshot["correlation_v2"]
+    assert {m["version"] for m in snapshot["correlation_v2"]}=={CORRELATION_V2_VERSION}
+    assert {m["score"] for m in snapshot["correlation_v2"]}=={m[1] for m in before}
+    assert [(m.id,m.score,m.reasons,m.correlation_version) for m in db.scalars(select(AlertClusterMembership).where(AlertClusterMembership.cluster_id==cluster.id))]==before
 
 
 def test_promotion_requires_open_cluster_current_assessment_and_same_org_actor(db, tmp_path):
