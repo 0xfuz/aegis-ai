@@ -52,3 +52,10 @@ def test_context_includes_only_confirmed_findings_and_mitre_without_mutation(db)
     assert [x["technique_id"] for x in snapshot["mitre"]]==["T1059"]
     assert snapshot["aliases"][snapshot["findings"][0]["alias"]]["id"]==str(rows[0].id)
     assert [(x.id,x.status) for x in rows]==before
+
+def test_missing_promotion_warning_is_stable_and_nonfatal(db):
+    org,_user,inv=scope(db)
+    one=ContextBuilder(db).build(org.id,inv.id); two=ContextBuilder(db).build(org.id,inv.id)
+    assert {row["code"] for row in one.snapshot["warnings"]} >= {"PROMOTION_LINK_MISSING","ASSETS_OMITTED_NO_EXPLICIT_INVESTIGATION_LINK"}
+    assert one.snapshot["warnings"]==two.snapshot["warnings"] and one.fingerprint==two.fingerprint
+    assert db.scalar(select(IntelligenceAnalysis).where(IntelligenceAnalysis.investigation_id==inv.id)) is None
