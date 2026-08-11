@@ -59,3 +59,16 @@ def test_missing_promotion_warning_is_stable_and_nonfatal(db):
     assert {row["code"] for row in one.snapshot["warnings"]} >= {"PROMOTION_LINK_MISSING","ASSETS_OMITTED_NO_EXPLICIT_INVESTIGATION_LINK"}
     assert one.snapshot["warnings"]==two.snapshot["warnings"] and one.fingerprint==two.fingerprint
     assert db.scalar(select(IntelligenceAnalysis).where(IntelligenceAnalysis.investigation_id==inv.id)) is None
+
+def test_db_section_limit_is_sorted_scoped_and_alias_safe(db):
+    org,_user,inv=scope(db); other,_u,other_inv=scope(db)
+    own=[Entity(org_id=org.id,investigation_id=inv.id,type="host",canonical_value=value,display_name=value) for value in ("z","a","m")]
+    foreign=Entity(org_id=other.id,investigation_id=other_inv.id,type="host",canonical_value="a",display_name="a")
+    db.add_all(own+[foreign]);db.commit(); policy=ContextPolicy(max_entities=2,max_bytes=10000)
+    one=ContextBuilder(db,policy).build(org.id,inv.id); two=ContextBuilder(db,policy).build(org.id,inv.id)
+    assert [row["value"] for row in one.snapshot["entities"]]==["a","m"]
+    omission=next(row for row in one.snapshot["omissions"] if row["section"]=="entities")
+    assert omission=={"section":"entities","reason":"LIMIT","original_count":3,"returned_count":2}
+    aliases={row["alias"] for row in one.snapshot["entities"]}
+    assert aliases <= set(one.snapshot["aliases"]) and str(foreign.id) not in {row["id"] for row in one.snapshot["aliases"].values()}
+    assert one.snapshot==two.snapshot and one.fingerprint==two.fingerprint
