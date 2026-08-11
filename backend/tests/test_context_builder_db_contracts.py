@@ -1,0 +1,54 @@
+"""PostgreSQL-backed ContextBuilder ownership, determinism and run-seam contracts."""
+from uuid import uuid4
+import pytest
+from sqlalchemy import select
+from app.modules.ai_reasoning.domain.context_builder import ContextBuilder, ContextPolicy
+from app.modules.ai_reasoning.domain.intelligence_service import InvestigationIntelligenceService
+from app.modules.ai_reasoning.infrastructure.intelligence_models import IntelligenceAnalysis, IntelligenceItem
+from app.modules.evidence.infrastructure.models import Entity
+from app.modules.identity.infrastructure.models import Organization, Role, User
+from app.modules.investigations.infrastructure.models import Investigation, InvestigationStatus, Severity
+from app.modules.investigations.infrastructure.models import Finding, MitreMapping
+from app.shared.database import SessionLocal
+from app.shared.exceptions import NotFoundError
+
+@pytest.fixture()
+def db():
+    s=SessionLocal()
+    try: yield s
+    finally: s.rollback();s.close()
+
+def scope(db, suffix=None):
+    suffix=suffix or uuid4().hex; org=Organization(name=suffix,slug=f"ctx-{suffix}"); role=Role(name=f"ctx-role-{suffix}");db.add_all([org,role]);db.flush();user=User(org_id=org.id,role_id=role.id,email=f"{suffix}@test",hashed_password="x",full_name="ctx");inv=Investigation(org_id=org.id,title="context",source="pytest",severity=Severity.MEDIUM,status=InvestigationStatus.NEW);db.add_all([user,inv]);db.commit();return org,user,inv
+
+def test_database_snapshot_is_stable_scoped_and_aliases_authoritative(db):
+    org,_user,inv=scope(db); other,_u,other_inv=scope(db)
+    # Deliberately non-semantic insertion order; query order is semantic.
+    db.add_all([Entity(org_id=org.id,investigation_id=inv.id,type="host",canonical_value="z",display_name="z"),Entity(org_id=org.id,investigation_id=inv.id,type="host",canonical_value="a",display_name="a"),Entity(org_id=other.id,investigation_id=other_inv.id,type="host",canonical_value="a",display_name="foreign")]);db.commit()
+    first=ContextBuilder(db).build(org.id,inv.id); second=ContextBuilder(db).build(org.id,inv.id)
+    assert first.fingerprint==second.fingerprint and first.snapshot==second.snapshot
+    assert [x["value"] for x in first.snapshot["entities"]]==["a","z"]
+    assert len(first.snapshot["aliases"])==len(set(first.snapshot["aliases"]))
+    assert all(v["id"] != str(other_inv.id) for v in first.snapshot["aliases"].values())
+    with pytest.raises(NotFoundError): ContextBuilder(db).build(other.id,inv.id)
+    assert ContextBuilder(db,ContextPolicy(max_entities=1)).build(org.id,inv.id).fingerprint != first.fingerprint
+
+def test_context_run_is_queued_idempotent_and_has_no_claim_side_effect(db):
+    org,_user,inv=scope(db); service=InvestigationIntelligenceService(db)
+    before=db.scalar(select(IntelligenceItem).where(IntelligenceItem.investigation_id==inv.id))
+    first=service.create_context_run(org.id,inv.id,"request-1"); db.commit()
+    second=service.create_context_run(org.id,inv.id,"request-1")
+    assert first.id==second.id and first.status=="QUEUED" and before is None
+    assert db.scalar(select(IntelligenceItem).where(IntelligenceItem.analysis_id==first.id)) is None
+    other,_u,other_inv=scope(db)
+    assert service.create_context_run(other.id,other_inv.id,"request-1").id != first.id
+
+def test_context_includes_only_confirmed_findings_and_mitre_without_mutation(db):
+    org,user,inv=scope(db); _other,_u,other_inv=scope(db)
+    rows=[Finding(org_id=org.id,investigation_id=inv.id,analyst_id=user.id,title="confirmed",description="safe",status="CONFIRMED"),Finding(org_id=org.id,investigation_id=inv.id,analyst_id=user.id,title="pending",description="safe",status="OPEN"),Finding(org_id=org.id,investigation_id=other_inv.id,analyst_id=user.id,title="other",description="safe",status="CONFIRMED"),MitreMapping(org_id=org.id,investigation_id=inv.id,technique_id="T1059",technique_name="Command",tactic="execution",confidence=80,ai_rationale="safe",status="CONFIRMED",reviewed_by_id=user.id),MitreMapping(org_id=org.id,investigation_id=inv.id,technique_id="T1003",technique_name="Credential",tactic="credential-access",confidence=80,ai_rationale="safe",status="PROPOSED")]
+    db.add_all(rows);db.commit(); before=[(x.id,x.status) for x in rows]
+    snapshot=ContextBuilder(db).build(org.id,inv.id).snapshot
+    assert [x["title"] for x in snapshot["findings"]]==["confirmed"]
+    assert [x["technique_id"] for x in snapshot["mitre"]]==["T1059"]
+    assert snapshot["aliases"][snapshot["findings"][0]["alias"]]["id"]==str(rows[0].id)
+    assert [(x.id,x.status) for x in rows]==before
