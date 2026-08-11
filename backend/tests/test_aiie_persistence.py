@@ -157,7 +157,7 @@ def test_aiie_review_and_audit_history_are_append_only(db):
 
     history = db.scalars(select(IntelligenceReviewEvent).where(IntelligenceReviewEvent.item_id == item.id).order_by(IntelligenceReviewEvent.created_at)).all()
     audits = db.scalars(select(AuditEvent).where(AuditEvent.target_id == item.id, AuditEvent.action == "INTELLIGENCE_ITEM_REVIEWED")).all()
-    assert [(event.from_status, event.to_status) for event in history] == [("UNREVIEWED", "APPROVED"), ("APPROVED", "SUPERSEDED")]
+    assert [(event.from_status, event.to_status) for event in history] == [("PENDING", "CONFIRMED"), ("CONFIRMED", "SUPERSEDED")]
     assert len(audits) == 2
     with pytest.raises(ValidationError):
         service.review(org.id, item.id, user.id, "APPROVED", "Terminal items cannot change.")
@@ -198,7 +198,9 @@ def test_aiie_http_workflow_runs_reads_and_reviews(db, monkeypatch):
     notebook = client.get(f"/api/v1/investigations/{investigation.id}/intelligence", headers=headers)
     observation = next(item for item in notebook.json()["items"] if item["kind"] == "OBSERVATION")
     reviewed = client.post(f"/api/v1/investigations/intelligence/items/{observation['id']}/review", headers=headers, json={"status": "APPROVED", "rationale": "Supported by the cited host."})
-    assert notebook.status_code == 200 and reviewed.json()["review_status"] == "APPROVED"
+    # The legacy APPROVED request remains accepted, while canonical persisted
+    # and returned status is CONFIRMED.
+    assert notebook.status_code == 200 and reviewed.json()["review_status"] == "CONFIRMED"
 
 
 @pytest.mark.parametrize("invalid", [

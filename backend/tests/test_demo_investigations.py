@@ -43,7 +43,7 @@ def test_all_demo_scenarios_import_build_graph_open_notebook_and_report(db):
         graph = CanonicalGraphProjectionService(db).project(org.id, investigation.id, GraphFilters())
         assert graph["nodes"]
         assert db.scalar(select(IntelligenceAnalysis).where(IntelligenceAnalysis.investigation_id == investigation.id))
-        assert db.scalar(select(IntelligenceItem).where(IntelligenceItem.investigation_id == investigation.id, IntelligenceItem.review_status == "APPROVED"))
+        assert db.scalar(select(IntelligenceItem).where(IntelligenceItem.investigation_id == investigation.id, IntelligenceItem.review_status == "CONFIRMED"))
         report, _media_type, _filename = ReportService().generate(investigation, "technical", "markdown")
         report_text = report.decode()
         assert investigation.title in report_text and investigation.mitre_techniques[0] in report_text

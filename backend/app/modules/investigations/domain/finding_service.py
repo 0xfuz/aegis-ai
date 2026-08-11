@@ -29,7 +29,7 @@ class FindingService:
   InvestigationService(self.db).get_investigation(org,investigation); row=Finding(org_id=org,investigation_id=investigation,analyst_id=user,**data);self.db.add(row);self.db.flush();self._audit(org,investigation,user,"FINDING_CREATED_MANUALLY",row);self.db.commit();return self._finding(row)
  def create_from_item(self,org,item_id,user,title=None,severity="medium"):
   item=self._item(org,item_id)
-  if item.review_status!="APPROVED" or item.kind not in {"OBSERVATION","HYPOTHESIS","RECOMMENDATION"}: raise ValidationError("Only APPROVED observations, hypotheses, or recommendations can become findings.")
+  if item.review_status!="CONFIRMED" or item.kind not in {"OBSERVATION","HYPOTHESIS","RECOMMENDATION"}: raise ValidationError("Only confirmed observations, hypotheses, or recommendations can become findings.")
   if self.db.scalar(select(Finding).where(Finding.source_intelligence_item_id==item.id)): raise ValidationError("This intelligence item has already been converted to a finding.")
   row=Finding(org_id=org,investigation_id=item.investigation_id,source_intelligence_item_id=item.id,source_analysis_id=item.analysis_id,title=title or item.statement[:255],description=item.statement,severity=severity,confidence=item.confidence,status="OPEN",analyst_id=user);self.db.add(row);self.db.flush()
   for link in self.db.scalars(select(IntelligenceFactLink).where(IntelligenceFactLink.org_id==org,IntelligenceFactLink.item_id==item.id)): self.db.add(FindingFactLink(org_id=org,finding_id=row.id,fact_type=link.fact_type,fact_id=link.fact_id,role=link.role))
