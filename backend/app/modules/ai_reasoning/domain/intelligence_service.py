@@ -16,6 +16,7 @@ from app.modules.investigations.domain.service import InvestigationService
 from app.modules.investigations.infrastructure.models import MitreMapping, MitreMappingFactLink
 from app.shared.exceptions import NotFoundError, ValidationError
 from app.modules.ai_reasoning.domain.intelligence_contracts import canonical_claim_type, canonical_review_status, validate_claim_creation, validate_review_transition, validate_run_transition
+from app.modules.ai_reasoning.domain.context_builder import ContextBuilder
 
 PROMPT_VERSION="aiie-facts-alias-v1"
 ALIAS_PREFIXES={"evidence":"E","raw_records":"RR","events":"EV","indicators":"IN","entities":"EN","relationships":"REL"}
@@ -85,6 +86,10 @@ class InvestigationIntelligenceService:
    if predecessor.status not in {"COMPLETED","FAILED","CANCELLED"}:raise ValidationError("Only terminal runs may be retried.")
   row=IntelligenceAnalysis(org_id=org,investigation_id=investigation,provider=provider,model=model,prompt_template_version=prompt_template_version,input_snapshot=input_snapshot,input_hash=input_hash,request_key=request_key,output_schema_version="aiie-output-v1",predecessor_analysis_id=predecessor.id if predecessor else None,status="QUEUED")
   self.db.add(row);self.db.flush();return row
+ def create_context_run(self,org:UUID,investigation:UUID,request_key:str,*,provider="pending",model="pending"):
+  """Persistence seam only: building context never invokes a provider or starts a run."""
+  context=ContextBuilder(self.db).build(org,investigation)
+  return self.create_run(org,investigation,provider=provider,model=model,prompt_template_version=PROMPT_VERSION,input_snapshot=context.snapshot,input_hash=context.fingerprint,request_key=request_key)
  def transition_run(self,org:UUID,analysis_id:UUID,status:str)->IntelligenceAnalysis:
   row=self.db.get(IntelligenceAnalysis,analysis_id)
   if not row or row.org_id!=org:raise NotFoundError("Intelligence run not found.")
