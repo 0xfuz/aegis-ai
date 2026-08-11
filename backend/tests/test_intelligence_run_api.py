@@ -74,3 +74,24 @@ def test_route_authentication_permission_activity_and_foreign_scope(db):
     assert client.post(base(inv),json={"request_key":"inactive"},headers=write).status_code==404
     paths={route.path for route in app.routes}
     assert not any(any(token in path for token in ("/acquire","/complete","/fail","/transition","/snapshot")) and "/intelligence/runs" in path for path in paths)
+
+
+@pytest.mark.parametrize("field,value",[("org_id","00000000-0000-0000-0000-000000000000"),("actor_id","00000000-0000-0000-0000-000000000000"),("status","RUNNING"),("input_snapshot",{}),("fingerprint","a"*64),("claims",[]),("provider_output",{})])
+def test_queue_rejects_all_client_authority_and_configuration_fields(db,field,value):
+    org,user,inv=scope(db);client=TestClient(app);payload={"request_key":"strict",field:value}
+    assert client.post(base(inv),json=payload,headers=headers(user,org,["investigation:write"])).status_code==422
+
+
+def test_running_cancel_failed_retry_safe_metadata_and_pagination(db):
+    org,user,inv=scope(db);client=TestClient(app);auth=headers(user,org,["investigation:read","investigation:write"]);service=IntelligenceRunOrchestrationService(db)
+    one=client.post(base(inv),json={"request_key":"one"},headers=auth).json()["id"]
+    two=client.post(base(inv),json={"request_key":"two"},headers=auth).json()["id"]
+    page=client.get(base(inv)+"?limit=1&offset=0",headers=auth).json();next_page=client.get(base(inv)+"?limit=1&offset=1",headers=auth).json()
+    assert len(page["items"])==len(next_page["items"])==1 and page["items"][0]["id"]!=next_page["items"][0]["id"]
+    service.acquire(org.id,one)
+    assert client.post(f"{base(inv)}/{one}/cancel",json={},headers=auth).json()["status"]=="CANCELLED"
+    service.acquire(org.id,two);service.fail(org.id,two,RuntimeError("api-sensitive-exception-marker"))
+    failed=client.get(f"{base(inv)}/{two}",headers=auth).json()
+    assert failed["error_summary"]=="RUNTIMEERROR_FAILED" and "input_snapshot" not in failed and "sensitive" not in str(failed)
+    assert client.post(f"{base(inv)}/{two}/retry",json={"request_key":"failed-retry"},headers=auth).status_code==202
+    assert client.get(f"{base(inv)}/not-a-uuid",headers=auth).status_code==422
