@@ -2,7 +2,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from app.modules.ai_reasoning.domain.context_builder import ContextBuilder
@@ -25,6 +25,16 @@ class IntelligenceRunOrchestrationService:
         row=self.db.scalar(stmt)
         if not row: raise NotFoundError("Intelligence run not found.")
         return row
+    def get(self, org: UUID, investigation: UUID, actor: UUID, run_id: UUID):
+        self._actor(org,actor)
+        InvestigationService(self.db).get_investigation(org,investigation)
+        row=self._run(org,run_id)
+        if row.investigation_id != investigation: raise NotFoundError("Intelligence run not found.")
+        return row
+    def list(self, org: UUID, investigation: UUID, actor: UUID, limit: int, offset: int):
+        self._actor(org,actor)
+        InvestigationService(self.db).get_investigation(org,investigation)
+        return self.db.scalars(select(IntelligenceAnalysis).where(IntelligenceAnalysis.org_id==org,IntelligenceAnalysis.investigation_id==investigation).order_by(desc(IntelligenceAnalysis.created_at),desc(IntelligenceAnalysis.id)).limit(limit).offset(offset)).all()
     def _actor(self, org: UUID, actor: UUID):
         if actor is None or not self.db.scalar(select(User.id).where(User.id==actor,User.org_id==org,User.is_active.is_(True))): raise NotFoundError("Active analyst not found.")
     def _recover_request(self, org: UUID, investigation: UUID, request_key: str, fingerprint: str):
