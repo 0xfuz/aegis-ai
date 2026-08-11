@@ -72,6 +72,19 @@ class ContextBuilder:
         rows = list(rows)
         if len(rows) > limit: omissions.append({"section":name,"reason":"LIMIT","original_count":len(rows),"returned_count":limit})
         return rows[:limit]
+    def _finalize_size(self, snapshot: dict) -> None:
+        if self.policy.max_bytes <= 0: raise ValidationError("Context max_bytes must be positive.")
+        # Lowest-priority tail removal after every collection's deterministic sort.
+        priority=("mitre","findings","relationships","indicators","entities","raw_records","evidence","events","alerts","correlation_v2")
+        def encoded(): return json.dumps(snapshot,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
+        while len(encoded()) > self.policy.max_bytes:
+            section=next((name for name in priority if snapshot.get(name)),None)
+            if section is None: raise ValidationError("Context max_bytes cannot contain mandatory metadata.")
+            removed=snapshot[section].pop()
+            alias=removed.get("alias") if isinstance(removed,dict) else None
+            if alias: snapshot["aliases"].pop(alias,None)
+            snapshot["omissions"].append({"section":section,"reason":"TOTAL_SIZE","original_count":snapshot["section_counts"][section],"returned_count":len(snapshot[section])})
+            snapshot["section_counts"][section]=len(snapshot[section])
     def build(self, org_id: UUID, investigation_id: UUID) -> ContextSnapshot:
         inv = InvestigationService(self.db).get_investigation(org_id, investigation_id)
         warnings, omissions, aliases = [], [], {}
@@ -107,8 +120,7 @@ class ContextBuilder:
         snapshot={"context_version":CONTEXT_VERSION,"builder_version":BUILDER_VERSION,"organization_id":str(org_id),"investigation_id":str(investigation_id),"policy":self.policy.__dict__,"investigation":{"title":_text(inv.title,self.policy.max_text,warnings,"investigation.title"),"source":_text(inv.source,self.policy.max_text,warnings,"investigation.source"),"severity":str(inv.severity.value if hasattr(inv.severity,"value") else inv.severity),"status":str(inv.status.value if hasattr(inv.status,"value") else inv.status)},"evidence":[{"alias":alias("E",x),"sha256":x.sha256,"name":_text(x.original_filename,self.policy.max_text,warnings,"evidence.name"),"status":x.parsing_status} for x in evidence],"raw_records":[{"alias":alias("RR",x),"evidence_id":str(x.evidence_id),"ordinal":x.ordinal,"content_type":x.content_type,"content":_text(x.content,self.policy.max_text,warnings,"raw.content")} for x in raws],"events":[{"alias":alias("EV",x),"timestamp":x.timestamp.isoformat() if x.timestamp else None,"type":x.event_type,"host":_text(x.host,self.policy.max_text,warnings,"event.host"),"user":_text(x.user,self.policy.max_text,warnings,"event.user"),"normalized":sanitize(x.normalized,self.policy,warnings,"event.normalized")} for x in events],"entities":[{"alias":alias("EN",x),"type":x.type,"value":_text(x.canonical_value,self.policy.max_text,warnings,"entity.value"),"attributes":sanitize(x.attributes or {},self.policy,warnings,"entity.attributes")} for x in entities],"indicators":[{"alias":alias("IN",x),"type":x.type,"value":_text(x.normalized_value,self.policy.max_text,warnings,"indicator.value")} for x in indicators],"relationships":[{"alias":alias("REL",x),"source_entity_id":str(x.source_entity_id),"target_entity_id":str(x.target_entity_id),"type":x.relationship_type} for x in relationships],"alerts":[{"alias":alias("AL",x),"source":x.source,"source_alert_id":_text(x.source_alert_id,self.policy.max_text,warnings,"alert.id"),"observed_at":x.observed_at.isoformat(),"severity":x.severity,"observables":sanitize(x.normalized_observables,self.policy,warnings,"alert.observables")} for x in alerts],"correlation_v2":correlation,"triage":triage,"findings":[{"alias":alias("FI",x),"title":_text(x.title,self.policy.max_text,warnings,"finding.title"),"status":x.status} for x in findings],"mitre":[{"alias":alias("MT",x),"technique_id":x.technique_id,"tactic":x.tactic} for x in mitre],"assets":[],"aliases":aliases,"omissions":omissions,"warnings":warnings}
         warnings.append({"code":"ASSETS_OMITTED_NO_EXPLICIT_INVESTIGATION_LINK"})
         snapshot["section_counts"]={k:len(snapshot[k]) for k in ("evidence","raw_records","events","entities","indicators","relationships","alerts","correlation_v2","findings","mitre")}
-        raw=json.dumps(snapshot,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
-        if len(raw)>self.policy.max_bytes: raise ValidationError("Deterministic context snapshot exceeds total-size policy.")
+        self._finalize_size(snapshot)
         fingerprint=hashlib.sha256(json.dumps(snapshot,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
         snapshot["fingerprint"]=fingerprint
         return ContextSnapshot(snapshot,fingerprint)
