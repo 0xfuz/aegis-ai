@@ -3,16 +3,18 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import DataError, IntegrityError
 
 from app.modules.alert_triage.infrastructure.models import AlertCluster, AlertClusterAssessment, AlertClusterMembership, AlertClusterPromotion, CanonicalAlert
 from app.modules.ai_reasoning.infrastructure.intelligence_models import IntelligenceAnalysis, IntelligenceClaimEvidenceLink, IntelligenceEvidenceReference, IntelligenceFactLink, IntelligenceItem
+from app.modules.ai_reasoning.domain.evidence_reference_service import IntelligenceEvidenceReferenceService
 from app.modules.evidence.infrastructure.models import Entity, EntityObservation, EntityRelationship, Event, EvidenceItem, EvidenceParseRun, Indicator, IndicatorOccurrence, RawRecord
 from app.modules.connectors.infrastructure.models import Connector, RawEvent
 from app.modules.identity.infrastructure.models import Organization, Role, User
 from app.modules.investigations.infrastructure.models import Finding, Investigation, InvestigationStatus, MitreMapping, Severity
 from app.shared.database import SessionLocal
+from app.shared.exceptions import NotFoundError, ValidationError
 
 
 @pytest.fixture()
@@ -205,3 +207,45 @@ def test_legacy_fact_links_remain_unmodified_without_backfill(db):
     db.add(legacy); db.commit()
     assert db.get(IntelligenceFactLink, legacy.id) is not None
     assert db.scalar(select(IntelligenceEvidenceReference).where(IntelligenceEvidenceReference.analysis_id == item.analysis_id)) is None
+
+
+def service_aliases(targets):
+    return {f"A{ordinal}": {"type": reference_type, "id": str(target_id)} for ordinal, (reference_type, (_column, target_id)) in enumerate(targets.items(), 1)}
+
+
+def test_service_creates_all_twelve_server_resolved_references(db):
+    rows = scope(db); org, investigation, analysis, _item, _evidence = rows
+    targets = all_targets(db, rows)
+    analysis.input_snapshot = {"context_version": "phase8-context-v1", "builder_version": "8.1.2", "policy": {"max_text": 512}, "aliases": service_aliases(targets)}
+    db.commit(); service = IntelligenceEvidenceReferenceService(db)
+    created = [service.create(org.id, investigation.id, analysis.id, alias, expected) for alias, expected in ((alias, entry["type"]) for alias, entry in analysis.input_snapshot["aliases"].items())]
+    assert len({row.id for row in created}) == 12
+    assert db.scalar(select(func.count()).select_from(IntelligenceEvidenceReference).where(IntelligenceEvidenceReference.analysis_id == analysis.id)) == 12
+    assert all("content" not in row.locator_metadata for row in created)
+
+
+def test_service_rejects_forged_scope_stale_type_and_unconfirmed_targets(db):
+    rows = scope(db); org, investigation, analysis, _item, evidence = rows
+    analysis.input_snapshot = {"aliases": {"E1": {"type": "E", "id": str(evidence.id)}, "bad": {"type": "EVENT", "id": "not-a-uuid"}}}; db.commit()
+    service = IntelligenceEvidenceReferenceService(db)
+    with pytest.raises(ValidationError): service.create(org.id, investigation.id, analysis.id, "missing")
+    with pytest.raises(ValidationError): service.create(org.id, investigation.id, analysis.id, "E1", "EVENT")
+    with pytest.raises(ValidationError): service.create(org.id, investigation.id, analysis.id, "bad")
+    with pytest.raises(NotFoundError): service.create(uuid4(), investigation.id, analysis.id, "E1")
+    finding = Finding(org_id=org.id, investigation_id=investigation.id, title="pending", description="pending", severity="low", status="OPEN", analyst_id=db.scalar(select(User.id).where(User.org_id == org.id)))
+    db.add(finding); db.flush(); analysis.input_snapshot["aliases"]["FI1"] = {"type": "FINDING", "id": str(finding.id)}; db.commit()
+    with pytest.raises(ValidationError): service.create(org.id, investigation.id, analysis.id, "FI1")
+
+
+def test_service_idempotency_claim_roles_and_atomic_rollback(db):
+    rows = scope(db); org, investigation, analysis, item, evidence = rows
+    analysis.input_snapshot = {"aliases": {"E1": {"type": "E", "id": str(evidence.id)}, "bad": {"type": "EVENT", "id": str(uuid4())}}}; db.commit()
+    service = IntelligenceEvidenceReferenceService(db)
+    row = service.create(org.id, investigation.id, analysis.id, "E1")
+    assert service.create(org.id, investigation.id, analysis.id, "E1").id == row.id
+    assert service.link_claim(org.id, investigation.id, analysis.id, item.id, row.id, "SUPPORTS").id == service.link_claim(org.id, investigation.id, analysis.id, item.id, row.id, "SUPPORTS").id
+    with pytest.raises(ValidationError): service.link_claim(org.id, investigation.id, analysis.id, item.id, row.id, "INVALID")
+    before = db.scalar(select(func.count()).select_from(IntelligenceEvidenceReference).where(IntelligenceEvidenceReference.analysis_id == analysis.id))
+    with pytest.raises(ValidationError): service.create_many(org.id, investigation.id, analysis.id, [("E1", None), ("bad", None)])
+    assert db.scalar(select(func.count()).select_from(IntelligenceEvidenceReference).where(IntelligenceEvidenceReference.analysis_id == analysis.id)) == before
+    assert db.scalar(select(func.count()).select_from(IntelligenceFactLink).where(IntelligenceFactLink.item_id == item.id)) == 0
