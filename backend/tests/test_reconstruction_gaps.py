@@ -9,7 +9,9 @@ from app.modules.ai_reasoning.domain.reconstruction_gaps import ReconstructionGa
 from app.modules.ai_reasoning.domain.reconstruction_gaps import ReconstructionGapReader
 from app.modules.ai_reasoning.infrastructure.intelligence_models import IntelligenceAnalysis, IntelligenceClaimEvidenceLink, IntelligenceEvidenceReference, IntelligenceItem
 from app.modules.alert_triage.infrastructure.models import AlertClusterAssessment, AlertClusterMembership, AlertClusterPromotion
-from app.modules.evidence.infrastructure.models import EvidenceItem, EvidenceParseRun, RawRecord
+from app.modules.alert_triage.infrastructure.models import AlertCluster, AlertClusterAssessment, AlertClusterMembership, AlertClusterPromotion, CanonicalAlert
+from app.modules.connectors.infrastructure.models import Connector, RawEvent
+from app.modules.evidence.infrastructure.models import Entity, EntityObservation, EntityRelationship, EvidenceItem, EvidenceParseRun, Event, RawRecord
 from app.modules.identity.infrastructure.models import Organization, Role, User
 from app.modules.investigations.infrastructure.models import Finding, Investigation, InvestigationStatus, MitreMapping, RecommendedAction, Severity
 from app.shared.database import SessionLocal
@@ -78,3 +80,35 @@ def test_real_contextbuilder_limit_omission_stays_omitted(db):
     output=analyze(ReconstructionGapPolicy(),context,{"warnings":[],"activities":[]},[])
     gap=next(gap for gap in output["gaps"] if gap["code"]=="CONTEXT_OMITTED_BY_LIMIT")
     assert gap["classification"]=="OMITTED" and "TELEMETRY_ABSENT" not in {gap["code"] for gap in output["gaps"]}
+
+def promoted_complete(db):
+    key=uuid4().hex; now=datetime(2026,1,1,tzinfo=timezone.utc)
+    org=Organization(name=key,slug=f"full-{key}"); role=Role(name=f"full-role-{key}"); db.add_all((org,role)); db.flush()
+    user=User(org_id=org.id,role_id=role.id,email=f"{key}@test",hashed_password="x",full_name="test"); inv=Investigation(org_id=org.id,title="full",source="test",severity=Severity.LOW,status=InvestigationStatus.NEW); db.add_all((user,inv)); db.flush()
+    evidence=EvidenceItem(org_id=org.id,investigation_id=inv.id,original_filename="safe",storage_key=f"full-{key}",sha256="a"*64,byte_size=0,detected_mime="text/plain",extension=".log",acquisition_source="test",imported_at=now,parsing_status="complete"); db.add(evidence); db.flush()
+    parse=EvidenceParseRun(org_id=org.id,evidence_id=evidence.id,parser_name="test",parser_version="1",run_sequence=1,status="complete",started_at=now); db.add(parse); db.flush()
+    raw=RawRecord(org_id=org.id,evidence_id=evidence.id,parse_run_id=parse.id,ordinal=1,content="safe",content_locator={"line":1},content_type="text/plain"); db.add(raw); db.flush()
+    event=Event(org_id=org.id,investigation_id=inv.id,evidence_id=evidence.id,raw_record_id=raw.id,normalizer_name="test",normalizer_version="1",ordinal=1,timestamp=now,normalized={}); db.add(event); db.flush()
+    left=Entity(org_id=org.id,investigation_id=inv.id,type="host",canonical_value="left",display_name="left"); right=Entity(org_id=org.id,investigation_id=inv.id,type="host",canonical_value="right",display_name="right"); db.add_all((left,right)); db.flush()
+    obs=EntityObservation(org_id=org.id,investigation_id=inv.id,entity_id=left.id,evidence_id=evidence.id,raw_record_id=raw.id,event_id=event.id,extractor_name="test",extractor_version="1",occurrence_ordinal=1); rel=EntityRelationship(org_id=org.id,investigation_id=inv.id,source_entity_id=left.id,target_entity_id=right.id,relationship_type="seen",derivation_name="test",derivation_version="1",raw_record_id=raw.id,source_locator_hash="b"*64); db.add_all((obs,rel)); db.flush()
+    connector=Connector(org_id=org.id,name="test",type="webhook",status="CONNECTED",secret_hash="x",is_active=True); db.add(connector); db.flush(); raw_event=RawEvent(connector_id=connector.id,received_at=now,payload={"safe":True},investigation_id=inv.id); db.add(raw_event); db.flush()
+    alert=CanonicalAlert(org_id=org.id,connector_id=connector.id,raw_event_id=raw_event.id,source="test",source_alert_id=key,observed_at=now,ingested_at=now,title="test",description="",severity="LOW",normalized_observables={},source_metadata={},payload_digest="c"*64,normalizer_version="v1",lifecycle="CORRELATED"); db.add(alert); db.flush()
+    cluster=AlertCluster(org_id=org.id,identity_key=key,correlation_version="correlation-v2",status="PROMOTED",first_seen=now,last_seen=now,member_count=1,source_diversity=1); db.add(cluster); db.flush(); membership=AlertClusterMembership(org_id=org.id,cluster_id=cluster.id,alert_id=alert.id,correlation_version="correlation-v2",score=1,reasons=[],added_at=now); db.add(membership); db.flush()
+    assessment=AlertClusterAssessment(org_id=org.id,cluster_id=cluster.id,scoring_version="triage-v1",input_hash="d"*64,score=1,priority="LOW",ledger=[],reference_at=now,evaluated_at=now); db.add(assessment); db.flush(); db.add(AlertClusterPromotion(org_id=org.id,cluster_id=cluster.id,investigation_id=inv.id,evidence_id=evidence.id,actor_id=user.id,triage_assessment_id=assessment.id,export_version="v1",export_fingerprint="e"*64,manifest={"correlation_version":"correlation-v2"},status="COMPLETED",promoted_at=now)); db.commit()
+    return org,inv,evidence,raw,event
+
+def test_complete_promoted_v2_chain_has_no_false_provenance_or_lineage_gaps(db):
+    org,inv,_evidence,_raw,_event=promoted_complete(db)
+    output=ReconstructionGapReader(db).reconstruct(org.id,inv.id)
+    forbidden={"PARSER_FAILED","PARSER_REJECTED","PARSER_INCOMPLETE","RAW_CONTENT_UNAVAILABLE","LOCATOR_UNRESOLVED","PROMOTION_MISSING","PROMOTION_CLUSTER_MISSING","EXACT_VERSION_MEMBERSHIP_MISSING","TRIAGE_PROVENANCE_MISSING","PROVENANCE_UNRESOLVED"}
+    assert not ({gap["code"] for gap in output["gaps"]} & forbidden)
+
+def test_real_total_size_omission_and_persisted_sensor_contradiction(db):
+    org,inv,evidence,raw,event=promoted_complete(db)
+    for ordinal in range(2,20): db.add(Event(org_id=org.id,investigation_id=inv.id,evidence_id=evidence.id,raw_record_id=raw.id,normalizer_name=f"n{ordinal}",normalizer_version="1",ordinal=ordinal,timestamp=event.timestamp,normalized={"sensor_time":f"2026-01-01T12:{ordinal:02}:00Z" if ordinal < 4 else None, "note":"x"*200}))
+    db.commit()
+    policy=ContextPolicy(max_events=20,max_bytes=8000,max_text=512)
+    output=ReconstructionGapReader(db,context_policy=policy).reconstruct(org.id,inv.id)
+    assert any(gap["code"]=="CONTEXT_OMITTED_BY_TOTAL_SIZE" and gap["classification"]=="OMITTED" for gap in output["gaps"])
+    contradictions=[gap for gap in output["gaps"] if gap["code"]=="EXPLICIT_OBSERVATION_CONTRADICTION"]
+    assert contradictions and all(len(gap["provenance"])==2 for gap in contradictions)

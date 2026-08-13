@@ -69,9 +69,10 @@ def analyze(policy: ReconstructionGapPolicy, context: dict, temporal: dict, prov
     return {"policy_id": POLICY_ID, "gaps": gaps[:policy.max_gaps], "omitted": omitted}
 
 class ReconstructionGapReader:
-    def __init__(self, db: Session, policy: ReconstructionGapPolicy = ReconstructionGapPolicy()): self.db, self.policy=db,policy
+    def __init__(self, db: Session, policy: ReconstructionGapPolicy = ReconstructionGapPolicy(), context_policy=None): self.db, self.policy, self.context_policy=db,policy,context_policy
     def reconstruct(self, org_id: UUID, investigation_id: UUID):
-        context=ContextBuilder(self.db).build(org_id, investigation_id).snapshot
+        context=ContextBuilder(self.db, self.context_policy) if self.context_policy else ContextBuilder(self.db)
+        context=context.build(org_id, investigation_id).snapshot
         temporal=ActivityWindowReader(self.db).reconstruct(org_id, investigation_id)
         evidence=list(self.db.scalars(select(EvidenceItem).where(EvidenceItem.org_id==org_id, EvidenceItem.investigation_id==investigation_id)))
         evidence_by_id={row.id:row for row in evidence}; provenance=[]
