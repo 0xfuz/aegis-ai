@@ -35,7 +35,12 @@ def build_prompt(snapshot:dict, fingerprint:str)->PromptArtifact:
  if not isinstance(aliases,dict) or any(not _ALIAS.fullmatch(key) or not isinstance(value,dict) or not isinstance(value.get("type"),str) for key,value in aliases.items()): raise ContractError(ContractCategory.PROMPT_CONTEXT_INVALID)
  evidence=_canon(_clean(material)); body=("<platform-instructions>"+SYSTEM_INSTRUCTIONS+"</platform-instructions>\n<strict-schema>{\"schema_version\":\""+CANDIDATE_SCHEMA_VERSION+"\",\"claims\":[...]}</strict-schema>\n<untrusted-evidence-json>"+evidence+"</untrusted-evidence-json>")
  if len(body.encode())>MAX_PROMPT_BYTES: raise ContractError(ContractCategory.PROMPT_TOO_LARGE)
- return PromptArtifact(SYSTEM_INSTRUCTIONS,evidence,hashlib.sha256(body.encode()).hexdigest(),{key:value["type"] for key,value in sorted(aliases.items())})
+ # ContextBuilder can describe global Entity/Indicator rows, but typed
+ # citations deliberately require occurrence-level provenance.  Keep those
+ # descriptions as inert context while excluding their non-persistable
+ # aliases from the model's citation vocabulary.
+ persistable={"E","RR","EV","EO","IO","REL","AL","CM","TR","PR","FI","MT"}
+ return PromptArtifact(SYSTEM_INSTRUCTIONS,evidence,hashlib.sha256(body.encode()).hexdigest(),{key:value["type"] for key,value in sorted(aliases.items()) if value["type"] in persistable})
 def _text(value,location):
  if not isinstance(value,str) or not value or len(value)>MAX_TEXT: raise ContractError(ContractCategory.CANDIDATE_SCHEMA_INVALID,location)
  if _SECRET.search(value) or _HTML.search(value): raise ContractError(ContractCategory.CANDIDATE_SECRET_DETECTED,location)

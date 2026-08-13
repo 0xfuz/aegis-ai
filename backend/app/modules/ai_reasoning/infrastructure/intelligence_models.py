@@ -44,6 +44,13 @@ class IntelligenceAnalysis(Base, UUIDPrimaryKeyMixin, TimestampMixin, OrgScopedM
     execution_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     execution_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     execution_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_execution_version: Mapped[str | None] = mapped_column(String(64))
+    provider_request_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    candidate_output_schema_version: Mapped[str | None] = mapped_column(String(64))
+    candidate_output_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    provider_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    provider_call_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_call_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 class IntelligenceItem(Base, UUIDPrimaryKeyMixin, TimestampMixin, OrgScopedMixin):
     __tablename__ = "intelligence_items"
