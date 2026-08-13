@@ -8,7 +8,18 @@ import { OverviewWorkspace } from "@/components/investigations/factual-workspace
 import { ApiError } from "@/lib/api-client";
 
 const state = vi.hoisted(() => ({ apiFetch: vi.fn() }));
-const reconstruction = vi.hoisted(() => ({ fetch: vi.fn().mockResolvedValue({}) }));
+const reconstruction = vi.hoisted(() => ({ fetch: vi.fn() }));
+const reconstructionResponse = {
+  policy_id: "reconstruction-read-v1",
+  investigation: { id: "case-1", title: "Case", status: "OPEN" },
+  versions: { context: "phase8-context-v1", activity: "activity-window-v1", gaps: "reconstruction-gaps-v1" },
+  context: { warnings: [], omissions: [], section_counts: {} },
+  activity: { policy_id: "activity-window-v1", anchor: null, activities: [], omitted: 0, warnings: [] },
+  gaps: { policy_id: "reconstruction-gaps-v1", gaps: [], omitted: 0 },
+  sections: { evidence: [], raw_records: [], events: [], entity_observations: [], indicator_occurrences: [], relationships: [], citations: [], findings: [], mitre: [] },
+  pagination: { section_omissions: {}, total_omitted: 0 },
+  warnings: [],
+};
 vi.mock("next/navigation", () => ({ useParams: () => ({ id: "case-1" }), usePathname: () => "/investigations/case-1/findings" }));
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("@/lib/api-client", async () => ({ ...(await vi.importActual<typeof import("@/lib/api-client")>("@/lib/api-client")), apiFetch: state.apiFetch }));
@@ -18,7 +29,7 @@ const findings = ["OPEN", "CONFIRMED", "DISMISSED", "RESOLVED"].map((status, ind
 const mappings = ["PROPOSED", "CONFIRMED", "REJECTED"].map((status, index) => ({ id: String(index), technique_id: `T10${index}`, technique_name: "Technique", tactic: "execution", confidence: 70, ai_rationale: "mapping rationale", status, source_intelligence_item_id: index === 0 ? "ai-1" : null, finding_id: index === 1 ? "finding-1" : null, fact_links: [{ fact_id: "event-1", role: "SUPPORTS" }] }));
 
 describe("A6 workspaces", () => {
-  beforeEach(() => { state.apiFetch.mockReset(); reconstruction.fetch.mockReset(); reconstruction.fetch.mockResolvedValue({}); });
+  beforeEach(() => { state.apiFetch.mockReset(); reconstruction.fetch.mockReset(); reconstruction.fetch.mockResolvedValue(reconstructionResponse); });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it("renders all finding states, AI source, and FACT provenance", async () => {

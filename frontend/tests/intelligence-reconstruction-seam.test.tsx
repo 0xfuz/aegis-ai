@@ -19,7 +19,7 @@ describe("Intelligence reconstruction fetch seam", () => {
     reconstruction.mockResolvedValue(response);
     apiFetch.mockResolvedValue({ status: "COMPLETED", generated_at: null, items: [] });
     render(<IntelligencePage />);
-    expect(await screen.findByText("Certified reconstruction is available. Explanation panels arrive in Phase 8.3.2.")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Certified reconstruction overview" })).toBeInTheDocument();
     expect(reconstruction).toHaveBeenCalledWith("case-42", expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(screen.getByRole("button", { name: "Run analysis" })).toBeInTheDocument();
   });

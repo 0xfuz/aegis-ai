@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { WorkspaceNav } from "@/components/investigations/workspace-nav";
 import { useInvestigationReconstruction } from "@/lib/use-investigation-reconstruction";
+import { ReconstructionExplanation } from "@/components/investigations/reconstruction-explanation";
 
 type Item = { id: string; kind: string; statement: string; confidence: number | null; review_status: string; fact_links: { fact_id: string; role: string }[] };
 type Analysis = { status: string; generated_at: string | null; items: Item[] };
@@ -29,7 +30,7 @@ export default function IntelligencePage() {
   const items = data?.items.filter((item) => item.kind === tab) ?? [];
   return <><div className="mb-2 text-xs text-text-muted"><Link href="/investigations">Cases</Link> / Investigation Intelligence</div><h1 className="font-display text-lg">Investigation Intelligence</h1><WorkspaceNav investigationId={id} />
     {reconstruction.status === "loading" && <p aria-live="polite" className="mb-3 text-xs text-text-muted">Loading certified reconstruction…</p>}
-    {reconstruction.status === "ready" && <p aria-live="polite" className="mb-3 text-xs text-text-muted">Certified reconstruction is available. Explanation panels arrive in Phase 8.3.2.</p>}
+    {reconstruction.status === "ready" && <ReconstructionExplanation investigationId={id} data={reconstruction.data} />}
     {["forbidden", "not_found", "invalid"].includes(reconstruction.status) && <Card className="mb-3" role="alert"><p className="text-sm text-text-muted">{reconstruction.error}</p></Card>}
     {reconstruction.status === "error" && <Card className="mb-3" role="alert"><p className="text-sm text-text-muted">{reconstruction.error}</p><Button variant="secondary" className="mt-2" onClick={reconstruction.retry}>Retry reconstruction</Button></Card>}
     <div className="mb-3 flex gap-2"><Button onClick={run}>Run analysis</Button><span className="self-center text-xs text-text-muted">AI INFERENCE · reviewable, never FACT.</span></div>{error ? <Card><p className="text-sm text-text-muted">{error}</p></Card> : !data ? <p className="text-sm text-text-muted">Loading intelligence notebook…</p> : <><div className="mb-3 flex flex-wrap gap-1">{tabs.map((name) => <button key={name} onClick={() => setTab(name)} className="rounded px-2 py-1 text-xs text-text-muted hover:bg-surface-raised">{name[0] + name.slice(1).toLowerCase()}</button>)}</div><Card>{items.length ? items.map((item) => <div key={item.id} className="border-b border-hairline py-3 last:border-0"><div className="flex justify-between text-xs"><span>{item.review_status} · {item.confidence ?? "—"}%</span><span>{item.kind}</span></div><p className="mt-2 text-sm">{item.statement}</p><div className="mt-2 text-xs text-text-muted">Supporting facts: {item.fact_links.map((link) => <Link className="mr-2 text-signal" key={`${link.role}-${link.fact_id}`} href={`/investigations/${id}/evidence`}>{link.role}: {link.fact_id}</Link>)}</div>{item.review_status === "APPROVED" && ["OBSERVATION", "HYPOTHESIS", "RECOMMENDATION"].includes(item.kind) && <Button className="mt-2" onClick={() => void convert(item.id)}>Convert to Finding</Button>}</div>) : <p className="text-sm text-text-muted">No items in this notebook section.</p>}</Card></>}</>;
