@@ -151,10 +151,13 @@ export default function InvestigationWorkspacePage() {
     setIsAnalyzing(true);
     setError(null);
     try {
-      await apiFetch(`/api/v1/investigations/${id}/analyze`, { method: "POST" });
+      await apiFetch(`/api/v1/investigations/${id}/intelligence/runs`, {
+        method: "POST",
+        body: JSON.stringify({ request_key: `legacy-ui:${Date.now().toString(36)}` }),
+      });
       load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't run AI analysis.");
+      setError(err instanceof ApiError ? err.message : "Couldn't queue intelligence analysis.");
     } finally {
       setIsAnalyzing(false);
     }

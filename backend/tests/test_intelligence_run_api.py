@@ -8,6 +8,7 @@ from app.core.security import create_access_token
 from app.main import app
 from app.modules.ai_reasoning.domain.run_orchestration_service import IntelligenceRunOrchestrationService
 from app.modules.ai_reasoning.infrastructure.intelligence_models import IntelligenceAnalysis, IntelligenceItem
+from app.modules.investigations.infrastructure.models import RecommendedAction
 from app.modules.evidence.infrastructure.models import AuditEvent, Entity
 from app.modules.identity.infrastructure.models import Organization, Role, User
 from app.modules.investigations.infrastructure.models import Investigation, InvestigationStatus, Severity
@@ -74,6 +75,23 @@ def test_route_authentication_permission_activity_and_foreign_scope(db):
     assert client.post(base(inv),json={"request_key":"inactive"},headers=write).status_code==404
     paths={route.path for route in app.routes}
     assert not any(any(token in path for token in ("/acquire","/complete","/fail","/transition","/snapshot")) and "/intelligence/runs" in path for path in paths)
+
+
+def test_legacy_synchronous_analyze_route_is_unregistered_and_cannot_mutate_authority(db, monkeypatch):
+    org,user,inv=scope(db);client=TestClient(app);auth=headers(user,org,["investigation:read","investigation:write"])
+    from app.modules.ai_reasoning.domain.service import ReasoningService
+    called=[]
+    async def forbidden(*_args, **_kwargs):
+        called.append(True)
+        raise AssertionError("legacy provider must be unreachable")
+    monkeypatch.setattr(ReasoningService,"analyze",forbidden)
+    before=(inv.root_cause, inv.mitre_techniques, inv.blast_radius_summary, db.scalar(select(func.count()).select_from(RecommendedAction).where(RecommendedAction.investigation_id==inv.id)))
+    assert client.post(f"/api/v1/investigations/{inv.id}/analyze",headers=auth).status_code==404
+    db.refresh(inv)
+    after=(inv.root_cause, inv.mitre_techniques, inv.blast_radius_summary, db.scalar(select(func.count()).select_from(RecommendedAction).where(RecommendedAction.investigation_id==inv.id)))
+    assert called==[] and after==before
+    paths={route.path for route in app.routes}
+    assert "/api/v1/investigations/{investigation_id}/analyze" not in paths
 
 
 @pytest.mark.parametrize("field,value",[("org_id","00000000-0000-0000-0000-000000000000"),("actor_id","00000000-0000-0000-0000-000000000000"),("status","RUNNING"),("input_snapshot",{}),("fingerprint","a"*64),("claims",[]),("provider_output",{})])

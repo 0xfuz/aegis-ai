@@ -43,3 +43,7 @@ Safe audits persist only status, request identity/hash and approved bounded cate
 - Real Ollama/provider invocation, prompt construction/versioning, structured output parsing, provider idempotency, and model timeout/token/cost handling.
 - Automatic AI claim/citation creation.
 - Live Wazuh end-to-end validation, automatic containment/remediation, cross-case retrieval, and SaaS/billing.
+
+## Post-certification erratum
+
+During Phase 8.5.0 inspection, a frozen legacy synchronous `POST /investigations/{id}/analyze` route was found still registered.  It could invoke the old provider path and mutate legacy Investigation fields and recommendations outside the certified queue/lease boundary.  It was retired in the corrective commit `fix(phase8): retire legacy synchronous reasoning route`; the historical `phase8.4-certified` tag is intentionally unchanged.  The execution foundation and migration `0022` are unchanged.  Future `0023` design must rely on atomic run-fenced persistence (or a genuinely non-redundant deterministic candidate key), not the redundant unique tuple `(id, lease_generation, provider_request_fingerprint)`.
