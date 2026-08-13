@@ -21,7 +21,7 @@ def url(inv):return f"/api/v1/investigations/{inv.id}/intelligence/reconstructio
 def test_reconstruction_api_scoped_safe_and_read_only(db):
  org,user,inv=scope(db);other,other_user,other_inv=scope(db);client=TestClient(app)
  response=client.get(url(inv),headers=auth(user,org));assert response.status_code==200
- body=response.json();assert {"policy_id","investigation","versions","context","activity","gaps","sections","pagination","warnings"}<=set(body)
+ body=response.json();assert {"policy_id","investigation","versions","context","activity","gaps","promotion","sections","pagination","warnings"}<=set(body)
  assert "content" not in str(body) and "input_snapshot" not in str(body)
  assert client.get(url(other_inv),headers=auth(user,org)).status_code==404
  assert client.get(url(inv),headers=auth(user,org,())).status_code==403

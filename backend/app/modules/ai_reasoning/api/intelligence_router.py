@@ -29,7 +29,7 @@ class RunList(BaseModel): items:list[RunRead]; limit:int; offset:int
 class ReconstructionRead(BaseModel):
     """Strict outer contract; nested sections are fixed, server-produced JSON."""
     model_config=ConfigDict(extra="forbid")
-    policy_id:str; investigation:dict; versions:dict; context:dict; activity:dict; gaps:dict; sections:dict; pagination:dict; warnings:list
+    policy_id:str; investigation:dict; versions:dict; context:dict; activity:dict; gaps:dict; promotion:dict; sections:dict; pagination:dict; warnings:list
 
 def safe_run(row: IntelligenceAnalysis) -> RunRead:
     snapshot=row.input_snapshot if isinstance(row.input_snapshot,dict) else {}
