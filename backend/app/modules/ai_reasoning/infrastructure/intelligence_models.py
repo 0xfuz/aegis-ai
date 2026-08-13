@@ -9,7 +9,16 @@ from app.shared.base import Base, OrgScopedMixin, TimestampMixin, UUIDPrimaryKey
 
 class IntelligenceAnalysis(Base, UUIDPrimaryKeyMixin, TimestampMixin, OrgScopedMixin):
     __tablename__ = "intelligence_analyses"
-    __table_args__ = (CheckConstraint("status IN ('QUEUED','RUNNING','COMPLETED','FAILED','CANCELLED')", name="ck_intelligence_analyses_status"), Index("ix_intelligence_analyses_investigation_generated", "investigation_id", "generated_at"), Index("ix_intelligence_analyses_org_investigation_status", "org_id", "investigation_id", "status"), Index("uq_intelligence_analyses_request", "org_id", "investigation_id", "request_key", unique=True))
+    __table_args__ = (
+        CheckConstraint("status IN ('QUEUED','RUNNING','COMPLETED','FAILED','CANCELLED')", name="ck_intelligence_analyses_status"),
+        CheckConstraint("lease_generation >= 0", name="ck_intelligence_analyses_lease_generation"),
+        CheckConstraint("execution_attempt_count >= 0", name="ck_intelligence_analyses_execution_attempt_count"),
+        CheckConstraint("(lease_owner_id IS NULL AND lease_acquired_at IS NULL AND lease_expires_at IS NULL AND lease_heartbeat_at IS NULL) OR (lease_owner_id IS NOT NULL AND lease_acquired_at IS NOT NULL AND lease_expires_at IS NOT NULL AND lease_heartbeat_at IS NOT NULL)", name="ck_intelligence_analyses_lease_tuple"),
+        CheckConstraint("lease_expires_at IS NULL OR lease_expires_at > lease_acquired_at", name="ck_intelligence_analyses_lease_expiry"),
+        CheckConstraint("execution_finished_at IS NULL OR execution_started_at IS NOT NULL", name="ck_intelligence_analyses_execution_finish"),
+        Index("ix_intelligence_analyses_investigation_generated", "investigation_id", "generated_at"), Index("ix_intelligence_analyses_org_investigation_status", "org_id", "investigation_id", "status"), Index("uq_intelligence_analyses_request", "org_id", "investigation_id", "request_key", unique=True),
+        Index("ix_intelligence_analyses_status_created_id", "status", "created_at", "id"), Index("ix_intelligence_analyses_status_lease_expiry_id", "status", "lease_expires_at", "id"), Index("ix_intelligence_analyses_lease_owner_status", "lease_owner_id", "status"),
+    )
     investigation_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("investigations.id", ondelete="RESTRICT"), nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     model: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -27,6 +36,14 @@ class IntelligenceAnalysis(Base, UUIDPrimaryKeyMixin, TimestampMixin, OrgScopedM
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     total_tokens: Mapped[int | None] = mapped_column(Integer)
     error_summary: Mapped[str | None] = mapped_column(Text)
+    lease_owner_id: Mapped[str | None] = mapped_column(String(128))
+    lease_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    lease_acquired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    execution_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    execution_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    execution_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 class IntelligenceItem(Base, UUIDPrimaryKeyMixin, TimestampMixin, OrgScopedMixin):
     __tablename__ = "intelligence_items"

@@ -72,7 +72,7 @@ def test_failure_is_safe_and_terminal_and_running_cancellation_is_audited(db):
     failed = service.queue(org.id, investigation.id, user.id, "failure")
     service.acquire(org.id, failed.id)
     row = service.fail(org.id, failed.id, RuntimeError("phase8-sensitive-marker"))
-    assert row.error_summary == "RUNTIMEERROR_FAILED" and "sensitive" not in row.error_summary
+    assert row.error_summary == "EXECUTION_FAILED" and "sensitive" not in row.error_summary
     assert audit_actions(db, failed.id) == ["INTELLIGENCE_RUN_QUEUED", "INTELLIGENCE_RUN_ACQUIRED", "INTELLIGENCE_RUN_FAILED"]
     with pytest.raises(ValidationError):
         service.complete(org.id, failed.id)

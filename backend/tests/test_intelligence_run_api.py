@@ -92,6 +92,6 @@ def test_running_cancel_failed_retry_safe_metadata_and_pagination(db):
     assert client.post(f"{base(inv)}/{one}/cancel",json={},headers=auth).json()["status"]=="CANCELLED"
     service.acquire(org.id,two);service.fail(org.id,two,RuntimeError("api-sensitive-exception-marker"))
     failed=client.get(f"{base(inv)}/{two}",headers=auth).json()
-    assert failed["error_summary"]=="RUNTIMEERROR_FAILED" and "input_snapshot" not in failed and "sensitive" not in str(failed)
+    assert failed["error_summary"]=="EXECUTION_FAILED" and "input_snapshot" not in failed and "sensitive" not in str(failed)
     assert client.post(f"{base(inv)}/{two}/retry",json={"request_key":"failed-retry"},headers=auth).status_code==202
     assert client.get(f"{base(inv)}/not-a-uuid",headers=auth).status_code==422
