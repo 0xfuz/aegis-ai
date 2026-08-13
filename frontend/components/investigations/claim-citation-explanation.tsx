@@ -1,4 +1,5 @@
 import { Card } from "@/components/ui/card";
+import { ClaimReviewControls } from "@/components/investigations/claim-review-controls";
 import type { InvestigationReconstruction, ReconstructionCitation, ReconstructionJson } from "@/lib/reconstruction-client";
 
 export type IntelligenceClaim = {
@@ -56,13 +57,13 @@ function ClaimCitations({ claimId, citations }: { claimId: string; citations: Re
   })}</div>;
 }
 
-export function ClaimExplanationPanel({ analysis, loadError, citations = [] }: { analysis: IntelligenceAnalysisRead | null; loadError: string | null; citations?: ReconstructionCitation[] }) {
+export function ClaimExplanationPanel({ analysis, loadError, citations = [], canReview = false, onReviewed = async () => {} }: { analysis: IntelligenceAnalysisRead | null; loadError: string | null; citations?: ReconstructionCitation[]; canReview?: boolean; onReviewed?: () => Promise<void> }) {
   if (!analysis) return <section aria-labelledby="intelligence-claims" className="mt-5"><h2 id="intelligence-claims" className="mb-2 text-base font-medium">Analyst-reviewed claims</h2><Card><p className="text-sm text-text-muted">{loadError ?? "Loading intelligence claim status…"}</p></Card></section>;
   const degraded = ["FAILED", "CANCELLED"].includes(analysis.status);
   return <section aria-labelledby="intelligence-claims" className="mt-5"><h2 id="intelligence-claims" className="mb-2 text-base font-medium">Analyst-reviewed claims</h2><Card>
     {degraded && <p role="status" className="text-sm text-text-muted">Intelligence run {analysis.status.toLowerCase()}. Deterministic reconstruction remains available; no claim is fabricated.</p>}
     {!degraded && analysis.items.length === 0 && <p className="text-sm text-text-muted">No intelligence claims generated yet.</p>}
-    {analysis.items.length > 0 && <ol aria-label="Server-ordered intelligence claims" className="space-y-3">{analysis.items.map((claim) => <li key={claim.id} id={`claim-${claim.id}`} tabIndex={-1} className="rounded border border-hairline p-3 focus:outline focus:outline-2 focus:outline-signal"><div className="flex flex-wrap gap-2 text-xs"><span className="font-medium">{claim.claim_type}</span><span>Origin: {claim.origin}</span><span>Review: {claim.review_status}</span>{claim.confidence !== null && <span>Confidence: {claim.confidence}%</span>}</div><p className="mt-2 text-sm">{claim.statement}</p><p className="mt-2 text-xs text-text-muted">{claimSemantics(claim)} {claim.review_status === "CONFIRMED" ? "CONFIRMED is an analyst-reviewed claim status; it does not change claim type or origin." : ""}</p><ClaimCitations claimId={claim.id} citations={citations} /></li>)}</ol>}
+    {analysis.items.length > 0 && <ol aria-label="Server-ordered intelligence claims" className="space-y-3">{analysis.items.map((claim) => <li key={claim.id} id={`claim-${claim.id}`} tabIndex={-1} className="rounded border border-hairline p-3 focus:outline focus:outline-2 focus:outline-signal"><div className="flex flex-wrap gap-2 text-xs"><span className="font-medium">{claim.claim_type}</span><span>Origin: {claim.origin}</span><span>Review: {claim.review_status}</span>{claim.confidence !== null && <span>Confidence: {claim.confidence}%</span>}</div><p className="mt-2 text-sm">{claim.statement}</p><p className="mt-2 text-xs text-text-muted">{claimSemantics(claim)} {claim.review_status === "CONFIRMED" ? "CONFIRMED is an analyst-reviewed claim status; it does not change claim type or origin." : ""}</p><ClaimCitations claimId={claim.id} citations={citations} /><ClaimReviewControls claim={claim} canReview={canReview} onReviewed={onReviewed} /></li>)}</ol>}
   </Card></section>;
 }
 
