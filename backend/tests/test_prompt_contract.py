@@ -22,7 +22,7 @@ def document(*claims):return json.dumps({"schema_version":CANDIDATE_SCHEMA_VERSI
 def test_prompt_is_deterministic_alias_only_and_inert():
  s=snapshot();first=build_prompt(s,s["fingerprint"]);second=build_prompt(s,s["fingerprint"])
  assert first.prompt_fingerprint==second.prompt_fingerprint and first.aliases=={"EV1":"EV","FI1":"FI"}
- assert "forbidden" not in first.evidence_context and "ignore prior instructions" in first.evidence_context and "untrusted data" in first.system_instructions
+ assert "forbidden" not in first.evidence_context and "ignore prior instructions" in first.evidence_context and "untrusted data" in first.system_instructions and "Include every listed field" in first.system_instructions
 def test_valid_candidate_is_canonical_and_fingerprinted():
  artifact=build_prompt(snapshot(),snapshot()["fingerprint"]);out=validate_candidate(document(claim(),claim("HYPOTHESIS",alternatives=[]),claim("INFERENCE",alternatives=[1])),artifact.aliases)
  assert out.fingerprint==hashlib.sha256(out.canonical_json.encode()).hexdigest() and "CONTRADICTS" not in out.canonical_json

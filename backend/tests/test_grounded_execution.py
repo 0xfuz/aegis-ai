@@ -24,6 +24,8 @@ class Provider:
   self.calls+=1
   if self.mode=="fail":raise ProviderFailure(ProviderCategory.UNAVAILABLE)
   if not checkpoint():raise ProviderFailure(ProviderCategory.CANCELLED)
+  if self.mode=="schema-invalid":
+   return BoundedCandidateResponse(json.dumps({"schema_version":"intelligence-candidate-output-v1","claims":[{"type":"OBSERVATION","statement":"observed","rationale":"evidence","confidence":50,"evidence_links":[{"alias":"E1","role":"SUPPORTS"}],"missing_information":[],"alternative_hypotheses":[],"review_status":"CONFIRMED"}]}))
   return BoundedCandidateResponse(json.dumps({"schema_version":"intelligence-candidate-output-v1","claims":[{"type":"OBSERVATION","statement":"observed","rationale":"evidence","confidence":50,"evidence_links":[{"alias":"E1","role":"SUPPORTS"}],"missing_information":[],"alternative_hypotheses":[]}]}))
 def test_grounded_pipeline_completes_only_via_atomic_candidate_persistence(db):
  org,inv,row=run(db);provider=Provider();result=GroundedIntelligenceExecutionPipeline(provider).execute(row.id,"grounded-worker");db.refresh(row)
@@ -34,3 +36,8 @@ def test_provider_failure_creates_no_claims_or_authority_side_effects(db):
  org,inv,row=run(db);provider=Provider("fail");result=GroundedIntelligenceExecutionPipeline(provider).execute(row.id,"grounded-failure");db.refresh(row)
  assert result.category=="PROVIDER_UNAVAILABLE" and row.status=="FAILED" and row.provider_call_started_at and row.provider_call_finished_at>=row.provider_call_started_at and db.scalar(select(IntelligenceItem).where(IntelligenceItem.analysis_id==row.id)) is None
  assert db.scalar(select(Finding).where(Finding.investigation_id==inv.id)) is None and db.scalar(select(MitreMapping).where(MitreMapping.investigation_id==inv.id)) is None and db.scalar(select(RecommendedAction).where(RecommendedAction.investigation_id==inv.id)) is None
+def test_schema_invalid_candidate_is_safe_failed_without_partial_persistence(db):
+ org,inv,row=run(db);result=GroundedIntelligenceExecutionPipeline(Provider("schema-invalid")).execute(row.id,"grounded-schema-invalid");db.refresh(row)
+ assert result.category=="CANDIDATE_SCHEMA_INVALID" and row.status=="FAILED" and row.error_summary=="CANDIDATE_SCHEMA_INVALID"
+ assert row.provider_call_started_at and row.provider_call_finished_at>=row.provider_call_started_at and row.candidate_output_fingerprint is None
+ assert db.scalar(select(IntelligenceItem).where(IntelligenceItem.analysis_id==row.id)) is None and db.scalar(select(IntelligenceClaimEvidenceLink).where(IntelligenceClaimEvidenceLink.investigation_id==inv.id)) is None

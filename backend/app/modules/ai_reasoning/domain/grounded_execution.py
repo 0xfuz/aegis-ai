@@ -73,8 +73,8 @@ class GroundedIntelligenceExecutionPipeline:
   request=TrustedPromptRequest(prompt_body=artifact.system_instructions+"\n"+artifact.evidence_context,idempotency_key=hashlib.sha256(f"{run_id}:{generation}:{artifact.prompt_fingerprint}".encode()).hexdigest())
   try:
    response=self.provider.generate(request,lambda:self._owned(org,run_id,owner,generation));candidate=validate_candidate(response.document,artifact.aliases)
-  except ProviderFailure as exc:return GroundedResult(run_id,exc.category.value,self._fail(org,run_id,owner,generation,exc.category.value if exc.category.value in {"EXECUTOR_UNAVAILABLE","EXECUTION_FAILED"} else "EXECUTOR_UNAVAILABLE"))
-  except ContractError as exc:return GroundedResult(run_id,exc.category.value,self._fail(org,run_id,owner,generation,"EXECUTOR_VALIDATION_FAILED"))
+  except ProviderFailure as exc:return GroundedResult(run_id,exc.category.value,self._fail(org,run_id,owner,generation,exc.category.value))
+  except ContractError as exc:return GroundedResult(run_id,exc.category.value,self._fail(org,run_id,owner,generation,exc.category.value))
   if not self._owned(org,run_id,owner,generation):return GroundedResult(run_id,"LEASE_OWNERSHIP_LOST",False)
   db=self.session_factory()
   try:
