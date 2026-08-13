@@ -76,6 +76,19 @@ class Settings(BaseSettings):
     INTELLIGENCE_TASK_PROTOCOL_VERSION: str = "intelligence-run-v1"
     INTELLIGENCE_RECONCILIATION_SECONDS: int = 15
     INTELLIGENCE_QUEUE_MIN_AGE_SECONDS: int = 15
+    # Phase 8.5 trusted provider boundary.  These settings are intentionally
+    # separate from legacy AI_PROVIDER settings and remain opt-in.
+    INTELLIGENCE_PROVIDER_ENABLED: bool = False
+    INTELLIGENCE_PROVIDER: str = "ollama"
+    INTELLIGENCE_OLLAMA_BASE_URL: str = "http://ollama:11434"
+    INTELLIGENCE_OLLAMA_MODEL: str = "llama3.2"
+    INTELLIGENCE_OLLAMA_ALLOWED_MODELS: str = "llama3.2"
+    INTELLIGENCE_PROVIDER_CONNECT_TIMEOUT_SECONDS: int = 5
+    INTELLIGENCE_PROVIDER_READ_TIMEOUT_SECONDS: int = 45
+    INTELLIGENCE_PROVIDER_TOTAL_TIMEOUT_SECONDS: int = 60
+    INTELLIGENCE_PROVIDER_MAX_REQUEST_BYTES: int = 262144
+    INTELLIGENCE_PROVIDER_MAX_RESPONSE_BYTES: int = 262144
+    INTELLIGENCE_PROVIDER_MAX_CONCURRENCY: int = 2
 
     # --- Canonical evidence ingestion (Phase 2) ---
     # Deliberately outside any frontend/public tree. Files are served only by
@@ -93,6 +106,8 @@ class Settings(BaseSettings):
     def validate_production_security(self) -> "Settings":
         if self.INTELLIGENCE_RECONCILIATION_SECONDS <= 0 or self.INTELLIGENCE_QUEUE_MIN_AGE_SECONDS < 0:
             raise ValueError("Intelligence reconciliation timing must be bounded.")
+        if min(self.INTELLIGENCE_PROVIDER_CONNECT_TIMEOUT_SECONDS, self.INTELLIGENCE_PROVIDER_READ_TIMEOUT_SECONDS, self.INTELLIGENCE_PROVIDER_TOTAL_TIMEOUT_SECONDS, self.INTELLIGENCE_PROVIDER_MAX_REQUEST_BYTES, self.INTELLIGENCE_PROVIDER_MAX_RESPONSE_BYTES, self.INTELLIGENCE_PROVIDER_MAX_CONCURRENCY) <= 0 or self.INTELLIGENCE_PROVIDER_READ_TIMEOUT_SECONDS > self.INTELLIGENCE_PROVIDER_TOTAL_TIMEOUT_SECONDS:
+            raise ValueError("Intelligence provider bounds are invalid.")
         if self.ENVIRONMENT.lower() != "production":
             return self
         if self.DEBUG:
