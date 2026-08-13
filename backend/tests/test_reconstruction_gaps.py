@@ -26,6 +26,17 @@ def test_bounds_and_invalid_configuration():
     assert len(payload["gaps"]) == 1 and payload["omitted"] == 1
     with pytest.raises(ValidationError): ReconstructionGapPolicy(max_gaps=0)
 
+def test_parser_taxonomy_safe_detail_and_explicit_two_sided_contradiction():
+    result=analyze(ReconstructionGapPolicy(detail_limit=32),{}, {},[
+        {"type":"EVIDENCE_ITEM","id":"pending","state":"pending"}, {"type":"EVIDENCE_ITEM","id":"rejected","state":"rejected"},
+        {"type":"EVIDENCE_ITEM","id":"odd","state":"password=synthetic-secret"}, {"type":"EVENT","id":"one","state":"complete","contradicts":["two"]},
+    ])
+    codes={gap["code"] for gap in result["gaps"]}
+    assert {"PARSER_INCOMPLETE","PARSER_REJECTED","PARSER_STATE_UNSUPPORTED","EXPLICIT_OBSERVATION_CONTRADICTION"} <= codes
+    contradiction=next(gap for gap in result["gaps"] if gap["code"]=="EXPLICIT_OBSERVATION_CONTRADICTION")
+    assert contradiction["provenance"] == ["one","two"]
+    assert "synthetic-secret" not in json.dumps(result)
+
 @pytest.fixture()
 def db():
     session=SessionLocal()

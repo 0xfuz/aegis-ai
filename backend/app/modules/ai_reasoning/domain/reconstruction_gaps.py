@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from uuid import UUID
 
 from sqlalchemy import select
@@ -22,8 +23,9 @@ class ReconstructionGapPolicy:
     def __post_init__(self):
         if not 0 < self.max_gaps <= 1000 or not 0 < self.detail_limit <= 512: raise ValidationError("Reconstruction gap policy bounds are unsafe.")
 
+_SECRET = re.compile(r"(?i)(?:password|secret|token|authorization)\s*[:=]\s*\S+")
 def _safe(value, limit):
-    return str(value).replace("\n", " ")[:limit]
+    return _SECRET.sub("[REDACTED]", str(value).replace("\n", " "))[:limit]
 
 def analyze(policy: ReconstructionGapPolicy, context: dict, temporal: dict, provenance: list[dict]) -> dict:
     """Pure projection; callers supply only persisted, already-scoped records."""
@@ -56,10 +58,12 @@ def analyze(policy: ReconstructionGapPolicy, context: dict, temporal: dict, prov
         target=(item["type"], item["id"])
         state=item.get("state")
         if state in {"failed", "rejected"}: add("PARSER_"+state.upper(), "parsing", "WARNING", "UNAVAILABLE", target)
-        elif state not in {"complete", "pending", "parsing"}: add("PARSER_STATE_UNSUPPORTED", "parsing", "WARNING", "UNSUPPORTED", target, state)
+        elif state in {"pending", "parsing", "incomplete"}: add("PARSER_INCOMPLETE", "parsing", "INFO", "INCOMPLETE", target)
+        elif state != "complete": add("PARSER_STATE_UNSUPPORTED", "parsing", "WARNING", "UNSUPPORTED", target, state)
         if item.get("raw_unavailable"): add("RAW_CONTENT_UNAVAILABLE", "raw_records", "WARNING", "UNAVAILABLE", target)
         if item.get("locator_unresolved"): add("LOCATOR_UNRESOLVED", "raw_records", "WARNING", "INCOMPLETE", target)
         if item.get("dangling"): add("PROVENANCE_UNRESOLVED", "provenance", "WARNING", "INCOMPLETE", target)
+        for other in item.get("contradicts", []): add("EXPLICIT_OBSERVATION_CONTRADICTION", "provenance", "WARNING", "CONTRADICTORY", target, refs=(item["id"], other))
     gaps.sort(key=lambda gap:(gap["severity"] != "BLOCKING", gap["severity"] != "WARNING", gap["section"], gap["code"], gap["target_type"] or "", gap["target_id"] or ""))
     omitted=max(0, len(gaps)-policy.max_gaps)
     return {"policy_id": POLICY_ID, "gaps": gaps[:policy.max_gaps], "omitted": omitted}
@@ -75,5 +79,13 @@ class ReconstructionGapReader:
             runs=list(self.db.scalars(select(EvidenceParseRun).where(EvidenceParseRun.org_id==org_id, EvidenceParseRun.evidence_id==item.id)))
             provenance.extend({"type":"EVIDENCE_ITEM","id":item.id,"state":run.status} for run in runs)
         for raw in self.db.scalars(select(RawRecord).where(RawRecord.org_id==org_id, RawRecord.evidence_id.in_(evidence_by_id))):
-            provenance.append({"type":"RAW_RECORD","id":raw.id,"state":"complete","raw_unavailable":raw.content is None,"locator_unresolved":raw.content is None and raw.content_locator is None})
+            provenance.append({"type":"RAW_RECORD","id":raw.id,"state":"complete","raw_unavailable":raw.content is None,"locator_unresolved":raw.content is None and not raw.content_locator})
+        events=list(self.db.scalars(select(Event).where(Event.org_id==org_id, Event.investigation_id==investigation_id)))
+        by_raw={}
+        for event in events:
+            sensor=event.normalized.get("sensor_time") if isinstance(event.normalized,dict) else None
+            if sensor is not None: by_raw.setdefault(event.raw_record_id,[]).append((event.id, str(sensor)))
+        for pairs in by_raw.values():
+            if len({value for _,value in pairs}) > 1:
+                for event_id,_ in pairs: provenance.append({"type":"EVENT","id":event_id,"state":"complete","contradicts":[other_id for other_id,_ in pairs if other_id != event_id]})
         return analyze(self.policy, context, temporal, provenance)
