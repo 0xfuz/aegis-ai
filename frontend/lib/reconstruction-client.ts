@@ -48,7 +48,21 @@ export type ReconstructionCitation = {
   locator: ReconstructionJson;
   producer: string | null;
   producer_version: string | null;
-  claim_role?: "SUPPORTS" | "CONTRADICTS" | "CONTEXT";
+  claim_links: { claim_id: string; role: "SUPPORTS" | "CONTRADICTS" | "CONTEXT" }[];
+  claim_links_omitted: number;
+};
+
+export type ReconstructionPromotion = {
+  state: "AVAILABLE" | "UNAVAILABLE" | "DEGRADED" | "UNSUPPORTED";
+  warning: string | null;
+  promotion: { id: string; status: string; cluster_id: string; promoted_at: string } | null;
+  correlation: {
+    version: string;
+    membership_count: number;
+    memberships: { id: string; score: number; reasons: ReconstructionJson; added_at: string }[];
+    memberships_omitted: number;
+  } | null;
+  triage: { id: string; status: "AVAILABLE"; priority: string; score: number; version: string } | null;
 };
 
 export type ReconstructionSections = {
@@ -70,6 +84,7 @@ export type InvestigationReconstruction = {
   context: { warnings: Array<{ code?: string; path?: string; returned?: number }>; omissions: ReconstructionOmission[]; section_counts: Record<string, number> };
   activity: { policy_id: string; anchor: { start: string; end: string } | null; activities: ReconstructionActivity[]; omitted: number; warnings: string[] };
   gaps: { policy_id: string; gaps: ReconstructionGap[]; omitted: number };
+  promotion: ReconstructionPromotion;
   sections: ReconstructionSections;
   pagination: { section_omissions: Record<string, number>; total_omitted: number };
   warnings: ReconstructionWarning[];

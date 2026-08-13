@@ -16,6 +16,7 @@ const reconstructionResponse = {
   context: { warnings: [], omissions: [], section_counts: {} },
   activity: { policy_id: "activity-window-v1", anchor: null, activities: [], omitted: 0, warnings: [] },
   gaps: { policy_id: "reconstruction-gaps-v1", gaps: [], omitted: 0 },
+  promotion: { state: "UNAVAILABLE", warning: "PROMOTION_LINK_MISSING", promotion: null, correlation: null, triage: null },
   sections: { evidence: [], raw_records: [], events: [], entity_observations: [], indicator_occurrences: [], relationships: [], citations: [], findings: [], mitre: [] },
   pagination: { section_omissions: {}, total_omitted: 0 },
   warnings: [],
@@ -63,20 +64,20 @@ describe("A6 workspaces", () => {
     await waitFor(() => expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations/findings/0/status", expect.objectContaining({ method: "POST" })));
   });
 
-  it("only exposes conversion for approved eligible intelligence and reloads after conversion", async () => {
-    const analysis = { status: "COMPLETED", generated_at: null, items: [{ id: "a", kind: "OBSERVATION", statement: "approved", confidence: 80, review_status: "APPROVED", fact_links: [{ fact_id: "event-1", role: "SUPPORTS" }] }, { id: "u", kind: "OBSERVATION", statement: "unreviewed", confidence: 80, review_status: "UNREVIEWED", fact_links: [] }, { id: "r", kind: "OBSERVATION", statement: "rejected", confidence: 80, review_status: "REJECTED", fact_links: [] }] };
+  it("only exposes conversion for confirmed eligible intelligence and reloads after conversion", async () => {
+    const analysis = { status: "COMPLETED", generated_at: null, items: [{ id: "a", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "confirmed", confidence: 80, review_status: "CONFIRMED", fact_links: [{ fact_id: "event-1", role: "SUPPORTS" }] }, { id: "u", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "unreviewed", confidence: 80, review_status: "PENDING", fact_links: [] }, { id: "r", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "rejected", confidence: 80, review_status: "REJECTED", fact_links: [] }] };
     state.apiFetch.mockResolvedValueOnce(analysis).mockResolvedValueOnce({}).mockResolvedValueOnce(analysis);
     render(<IntelligencePage />);
     fireEvent.click(await screen.findByText("Observation"));
     expect(screen.getAllByText("Convert to Finding")).toHaveLength(1);
     fireEvent.click(screen.getByText("Convert to Finding"));
     await waitFor(() => expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations/intelligence/items/a/finding", expect.objectContaining({ method: "POST" })));
-    expect(screen.getByText("unreviewed")).toBeInTheDocument();
-    expect(screen.getByText("rejected")).toBeInTheDocument();
+    expect(screen.getAllByText("unreviewed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("rejected").length).toBeGreaterThan(0);
   });
 
   it("surfaces an intelligence conversion API failure", async () => {
-    const analysis = { status: "COMPLETED", generated_at: null, items: [{ id: "a", kind: "OBSERVATION", statement: "approved", confidence: 80, review_status: "APPROVED", fact_links: [] }] };
+    const analysis = { status: "COMPLETED", generated_at: null, items: [{ id: "a", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "confirmed", confidence: 80, review_status: "CONFIRMED", fact_links: [] }] };
     state.apiFetch.mockResolvedValueOnce(analysis).mockRejectedValueOnce(new ApiError("conversion failed", 422));
     render(<IntelligencePage />);
     fireEvent.click(await screen.findByText("Observation"));

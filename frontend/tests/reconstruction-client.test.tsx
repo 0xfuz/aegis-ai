@@ -8,6 +8,7 @@ const response: InvestigationReconstruction = {
   policy_id: "reconstruction-read-v1", investigation: { id: "case-2", title: "Case", status: "new" }, versions: { context: "phase8-context-v1", activity: "activity-window-v1", gaps: "reconstruction-gaps-v1" },
   context: { warnings: [], omissions: [], section_counts: {} }, activity: { policy_id: "activity-window-v1", anchor: null, activities: [], omitted: 0, warnings: ["ANCHOR_MISSING"] },
   gaps: { policy_id: "reconstruction-gaps-v1", gaps: [], omitted: 0 }, sections: { evidence: [], raw_records: [], events: [], entity_observations: [], indicator_occurrences: [], relationships: [], citations: [], findings: [], mitre: [] }, pagination: { section_omissions: {}, total_omitted: 0 }, warnings: [],
+  promotion: { state: "UNAVAILABLE", warning: "PROMOTION_LINK_MISSING", promotion: null, correlation: null, triage: null },
 };
 
 function Probe({ id }: { id: unknown }) {

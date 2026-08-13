@@ -16,6 +16,7 @@ const base: InvestigationReconstruction = {
     { code: "RAW_CONTENT_UNAVAILABLE", section: "raw_records", severity: "WARNING", classification: "UNAVAILABLE", detail: "Raw content unavailable.", target_type: "RAW_RECORD", target_id: "raw-1", provenance: [] },
     { code: "CONTEXT_OMITTED_BY_TOTAL_SIZE", section: "events", severity: "INFO", classification: "OMITTED", detail: "TOTAL_SIZE:12", target_type: null, target_id: null, provenance: [] },
   ] },
+  promotion: { state: "AVAILABLE", warning: null, promotion: { id: "promotion-1", status: "COMPLETED", cluster_id: "cluster-1", promoted_at: "2026-01-01T00:00:00+00:00" }, correlation: { version: "correlation-v2", membership_count: 0, memberships: [], memberships_omitted: 0 }, triage: { id: "triage-1", status: "AVAILABLE", priority: "HIGH", score: 73, version: "triage-v1" } },
   sections: { evidence: [], raw_records: [{ id: "raw-private", evidence_id: "e1", ordinal: 1, content_type: "text/plain", locator: { content: "never render raw content" } }], events: [], entity_observations: [], indicator_occurrences: [], relationships: [], citations: [], findings: [], mitre: [] }, pagination: { section_omissions: {}, total_omitted: 0 }, warnings: [{ section: "activities", reason: "LIMIT", omitted: 1 }],
 };
 
