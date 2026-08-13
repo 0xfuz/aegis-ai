@@ -2,7 +2,7 @@ import json
 import pytest
 from datetime import datetime, timezone
 from uuid import uuid4
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.modules.ai_reasoning.domain.context_builder import ContextBuilder, ContextPolicy
 from app.modules.ai_reasoning.domain.reconstruction_gaps import ReconstructionGapPolicy, analyze
@@ -112,3 +112,43 @@ def test_real_total_size_omission_and_persisted_sensor_contradiction(db):
     assert any(gap["code"]=="CONTEXT_OMITTED_BY_TOTAL_SIZE" and gap["classification"]=="OMITTED" for gap in output["gaps"])
     contradictions=[gap for gap in output["gaps"] if gap["code"]=="EXPLICIT_OBSERVATION_CONTRADICTION"]
     assert contradictions and all(len(gap["provenance"])==2 for gap in contradictions)
+
+@pytest.mark.parametrize("case,warning,gap,classification,severity", [
+    ("no_promotion", "PROMOTION_LINK_MISSING", "PROMOTION_MISSING", "ABSENT", "WARNING"),
+    ("v1", "CORRELATION_V1_CONTEXT_UNSUPPORTED", "CORRELATION_VERSION_UNSUPPORTED", "UNSUPPORTED", "BLOCKING"),
+    ("unknown", "CORRELATION_VERSION_UNSUPPORTED", "CORRELATION_VERSION_UNSUPPORTED", "UNSUPPORTED", "BLOCKING"),
+    ("missing_members", "CORRELATION_V2_MEMBERSHIP_MISSING", "EXACT_VERSION_MEMBERSHIP_MISSING", "INCOMPLETE", "BLOCKING"),
+    ("triage_other_cluster", "TRIAGE_LINK_MISSING", "TRIAGE_PROVENANCE_MISSING", "INCOMPLETE", "WARNING"),
+])
+def test_persisted_promotion_provenance_gap_matrix(db, case, warning, gap, classification, severity):
+    org,inv,evidence,_raw,_event=promoted_complete(db)
+    promotion=db.scalar(select(AlertClusterPromotion).where(AlertClusterPromotion.investigation_id==inv.id))
+    cluster=db.get(AlertCluster,promotion.cluster_id)
+    if case=="no_promotion": db.delete(promotion)
+    elif case in {"v1","unknown"}:
+        cluster.correlation_version="correlation-v1" if case=="v1" else "correlation-x"; promotion.manifest={"correlation_version":cluster.correlation_version}
+    elif case=="missing_members": db.query(AlertClusterMembership).filter(AlertClusterMembership.cluster_id==cluster.id).delete()
+    elif case=="triage_other_cluster":
+        other=AlertCluster(org_id=org.id,identity_key=uuid4().hex,correlation_version="correlation-v2",status="OPEN",first_seen=promotion.promoted_at,last_seen=promotion.promoted_at,member_count=0,source_diversity=0); db.add(other); db.flush()
+        assessment=AlertClusterAssessment(org_id=org.id,cluster_id=other.id,scoring_version="triage-v1",input_hash="f"*64,score=1,priority="LOW",ledger=[],reference_at=promotion.promoted_at,evaluated_at=promotion.promoted_at); db.add(assessment); db.flush(); promotion.triage_assessment_id=assessment.id
+    db.commit()
+    models=(AlertClusterPromotion,AlertCluster,AlertClusterMembership,AlertClusterAssessment,IntelligenceAnalysis,IntelligenceItem,IntelligenceEvidenceReference,IntelligenceClaimEvidenceLink,Finding,MitreMapping,RecommendedAction)
+    before=[db.scalar(select(func.count()).select_from(model)) for model in models]
+    context=ContextBuilder(db).build(org.id,inv.id).snapshot
+    assert warning in [entry.get("code") if isinstance(entry,dict) else entry for entry in context["warnings"]]
+    first=ReconstructionGapReader(db).reconstruct(org.id,inv.id)
+    with SessionLocal() as fresh: second=ReconstructionGapReader(fresh).reconstruct(org.id,inv.id)
+    row=next(entry for entry in first["gaps"] if entry["code"]==gap)
+    assert first==second and (row["classification"],row["severity"])==(classification,severity)
+    assert before==[db.scalar(select(func.count()).select_from(model)) for model in models]
+
+def test_promotion_cluster_and_missing_triage_links_are_fk_not_applicable(db):
+    org,inv,_evidence,_raw,_event=promoted_complete(db)
+    promotion=db.scalar(select(AlertClusterPromotion).where(AlertClusterPromotion.investigation_id==inv.id))
+    # Both columns are non-null RESTRICT foreign keys; a dangling persisted link cannot exist.
+    with pytest.raises(Exception):
+        db.execute(text("UPDATE alert_cluster_promotions SET cluster_id = '00000000-0000-0000-0000-000000000001' WHERE id = :id"), {"id":str(promotion.id)}); db.commit()
+    db.rollback()
+    with pytest.raises(Exception):
+        db.execute(text("UPDATE alert_cluster_promotions SET triage_assessment_id = '00000000-0000-0000-0000-000000000001' WHERE id = :id"), {"id":str(promotion.id)}); db.commit()
+    db.rollback()
