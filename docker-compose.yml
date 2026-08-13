@@ -58,6 +58,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+      INTELLIGENCE_EXECUTION_ENABLED: ${INTELLIGENCE_EXECUTION_ENABLED:-false}
+      INTELLIGENCE_DISPATCH_ENABLED: ${INTELLIGENCE_DISPATCH_ENABLED:-false}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-CHANGE_ME_dev_only_insecure_secret}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DEBUG: ${DEBUG:-true}
@@ -93,6 +95,48 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - aegis_network
+
+  intelligence-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.intelligence_celery:celery_app", "worker", "--loglevel=INFO", "--queues=intelligence-execution"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis_ai}
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      INTELLIGENCE_EXECUTION_ENABLED: ${INTELLIGENCE_EXECUTION_ENABLED:-false}
+      INTELLIGENCE_DISPATCH_ENABLED: ${INTELLIGENCE_DISPATCH_ENABLED:-false}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-CHANGE_ME_dev_only_insecure_secret}
+    networks:
+      - aegis_network
+
+  intelligence-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.intelligence_celery:celery_app", "beat", "--loglevel=INFO"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis_ai}
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      INTELLIGENCE_EXECUTION_ENABLED: ${INTELLIGENCE_EXECUTION_ENABLED:-false}
+      INTELLIGENCE_DISPATCH_ENABLED: ${INTELLIGENCE_DISPATCH_ENABLED:-false}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-CHANGE_ME_dev_only_insecure_secret}
     networks:
       - aegis_network
 

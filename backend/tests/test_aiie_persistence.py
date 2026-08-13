@@ -186,21 +186,17 @@ def test_aiie_read_route_enforces_permission_and_org_scope(db):
     assert client.get(f"/api/v1/investigations/{investigation.id}/intelligence", headers={"Authorization": f"Bearer {other_allowed}"}).status_code == 404
 
 
-def test_aiie_http_workflow_runs_reads_and_reviews(db, monkeypatch):
+def test_aiie_legacy_http_route_queues_without_invoking_provider(db, monkeypatch):
     org, user, investigation, _entity = context(db)
-    monkeypatch.setattr(intelligence_service, "get_llm_provider", lambda: DeterministicProvider())
+    called = []
+    monkeypatch.setattr(intelligence_service, "get_llm_provider", lambda: called.append(True))
     client = TestClient(app)
     token = create_access_token(user.id, org.id, "analyst", ["investigation:read", "investigation:write"])
     headers = {"Authorization": f"Bearer {token}"}
 
     created = client.post(f"/api/v1/investigations/{investigation.id}/intelligence", headers=headers)
-    assert created.status_code == 200 and created.json()["status"] == "COMPLETED"
-    notebook = client.get(f"/api/v1/investigations/{investigation.id}/intelligence", headers=headers)
-    observation = next(item for item in notebook.json()["items"] if item["kind"] == "OBSERVATION")
-    reviewed = client.post(f"/api/v1/investigations/intelligence/items/{observation['id']}/review", headers=headers, json={"status": "APPROVED", "rationale": "Supported by the cited host."})
-    # The legacy APPROVED request remains accepted, while canonical persisted
-    # and returned status is CONFIRMED.
-    assert notebook.status_code == 200 and reviewed.json()["review_status"] == "CONFIRMED"
+    assert created.status_code == 200 and created.json()["status"] == "QUEUED"
+    assert called == []
 
 
 @pytest.mark.parametrize("invalid", [

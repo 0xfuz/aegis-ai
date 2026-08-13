@@ -68,6 +68,15 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://redis:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://redis:6379/2"
 
+    # Phase 8.4 dispatch is opt-in. PostgreSQL runs remain usable while no
+    # worker/Redis deployment is configured; no development default executes.
+    INTELLIGENCE_EXECUTION_ENABLED: bool = False
+    INTELLIGENCE_DISPATCH_ENABLED: bool = False
+    INTELLIGENCE_EXECUTION_QUEUE: str = "intelligence-execution"
+    INTELLIGENCE_TASK_PROTOCOL_VERSION: str = "intelligence-run-v1"
+    INTELLIGENCE_RECONCILIATION_SECONDS: int = 15
+    INTELLIGENCE_QUEUE_MIN_AGE_SECONDS: int = 15
+
     # --- Canonical evidence ingestion (Phase 2) ---
     # Deliberately outside any frontend/public tree. Files are served only by
     # authenticated controlled-download endpoints introduced with ingestion.
@@ -82,6 +91,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
+        if self.INTELLIGENCE_RECONCILIATION_SECONDS <= 0 or self.INTELLIGENCE_QUEUE_MIN_AGE_SECONDS < 0:
+            raise ValueError("Intelligence reconciliation timing must be bounded.")
         if self.ENVIRONMENT.lower() != "production":
             return self
         if self.DEBUG:

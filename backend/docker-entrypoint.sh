@@ -21,5 +21,10 @@ alembic upgrade head
 echo "[entrypoint] Checking explicit demo seed configuration..."
 python -m app.seed.bootstrap
 
+if [ "$#" -gt 0 ]; then
+  echo "[entrypoint] Starting requested process..."
+  exec "$@"
+fi
+
 echo "[entrypoint] Starting server..."
 exec uvicorn app.main:app --host 0.0.0.0 --port 8000

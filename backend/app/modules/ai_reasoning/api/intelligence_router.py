@@ -1,11 +1,12 @@
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.modules.ai_reasoning.domain.intelligence_service import InvestigationIntelligenceService
 from app.modules.ai_reasoning.domain.run_orchestration_service import IntelligenceRunOrchestrationService
+from app.modules.ai_reasoning.domain.run_dispatch import IntelligenceRunDispatcher
 from app.modules.ai_reasoning.infrastructure.intelligence_models import IntelligenceAnalysis
 from app.modules.ai_reasoning.domain.reconstruction_read_service import ReconstructionReadService
 from app.modules.identity.api.dependencies import Principal, require_permission
@@ -40,7 +41,10 @@ def conflict(error: ValidationError):
     raise error
 @router.post("/{investigation_id}/intelligence")
 async def run(investigation_id:UUID,principal:Principal=Depends(require_permission("investigation:write")),db:Session=Depends(get_db)):
- row=await InvestigationIntelligenceService(db).run(principal.org_id,investigation_id);return {"id":str(row.id),"status":row.status}
+ # Compatibility route: queues only. It never invokes a provider synchronously.
+ row=IntelligenceRunOrchestrationService(db).queue(principal.org_id,investigation_id,principal.user_id,f"legacy:{uuid4().hex}")
+ IntelligenceRunDispatcher(db).dispatch_committed(row.id)
+ return {"id":str(row.id),"status":row.status}
 @router.get("/{investigation_id}/intelligence")
 def latest(investigation_id:UUID,principal:Principal=Depends(require_permission("investigation:read")),db:Session=Depends(get_db)):
  return InvestigationIntelligenceService(db).latest(principal.org_id,investigation_id)
@@ -56,7 +60,10 @@ def review(item_id:UUID,body:ReviewIn,principal:Principal=Depends(require_permis
 
 @router.post("/{investigation_id}/intelligence/runs",response_model=RunRead,status_code=status.HTTP_202_ACCEPTED)
 def queue_run(investigation_id:UUID,body:RunRequest,principal:Principal=Depends(require_permission("investigation:write")),db:Session=Depends(get_db)):
-    try: return safe_run(IntelligenceRunOrchestrationService(db).queue(principal.org_id,investigation_id,principal.user_id,body.request_key))
+    try:
+        row=IntelligenceRunOrchestrationService(db).queue(principal.org_id,investigation_id,principal.user_id,body.request_key)
+        IntelligenceRunDispatcher(db).dispatch_committed(row.id)
+        return safe_run(row)
     except ValidationError as error: conflict(error)
 
 @router.get("/{investigation_id}/intelligence/runs/{run_id}",response_model=RunRead)
@@ -78,5 +85,8 @@ def cancel_run(investigation_id:UUID,run_id:UUID,body:CancelRequest,principal:Pr
 def retry_run(investigation_id:UUID,run_id:UUID,body:RunRequest,principal:Principal=Depends(require_permission("investigation:write")),db:Session=Depends(get_db)):
     service=IntelligenceRunOrchestrationService(db)
     service.get(principal.org_id,investigation_id,principal.user_id,run_id)
-    try: return safe_run(service.retry(principal.org_id,run_id,principal.user_id,body.request_key))
+    try:
+        row=service.retry(principal.org_id,run_id,principal.user_id,body.request_key)
+        IntelligenceRunDispatcher(db).dispatch_committed(row.id)
+        return safe_run(row)
     except ValidationError as error: conflict(error)
