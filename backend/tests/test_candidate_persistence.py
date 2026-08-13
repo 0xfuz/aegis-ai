@@ -22,6 +22,7 @@ def test_atomic_persistence_claims_links_metadata_and_idempotent_terminal_reject
  org,inv,run,token,candidate=ready(db);before={m:db.scalar(select(func.count()).select_from(m)) for m in (Finding,MitreMapping,RecommendedAction,IntelligenceFactLink)}
  completed=CandidatePersistenceService(db).persist(org.id,run.id,"worker",token["lease_generation"],candidate,provider_execution_version="provider-v1",provider_request_fingerprint="a"*64)
  assert completed.status=="COMPLETED" and completed.lease_owner_id is None and completed.candidate_output_fingerprint==candidate.fingerprint
+ assert completed.provider_call_started_at is None and completed.provider_call_finished_at is None
  items=list(db.scalars(select(IntelligenceItem).where(IntelligenceItem.analysis_id==run.id).order_by(IntelligenceItem.ordinal)));assert [(x.kind,x.origin,x.review_status,x.confidence) for x in items]==[("OBSERVATION","AI","PENDING",0),("HYPOTHESIS","AI","PENDING",100)] and items[1].payload["missing_information"]==["process"]
  assert db.scalar(select(func.count()).select_from(IntelligenceEvidenceReference).where(IntelligenceEvidenceReference.analysis_id==run.id))==1 and db.scalar(select(func.count()).select_from(IntelligenceClaimEvidenceLink).where(IntelligenceClaimEvidenceLink.investigation_id==inv.id))==2
  with pytest.raises(ValidationError):CandidatePersistenceService(db).persist(org.id,run.id,"worker",token["lease_generation"],candidate,provider_execution_version="provider-v1",provider_request_fingerprint="a"*64)

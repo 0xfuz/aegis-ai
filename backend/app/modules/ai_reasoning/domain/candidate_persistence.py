@@ -21,13 +21,16 @@ class CandidatePersistenceService:
    if not run or run.status!="RUNNING" or run.lease_owner_id!=owner or run.lease_generation!=generation or not run.lease_expires_at or run.lease_expires_at<=now: raise ValidationError("Intelligence execution lease is no longer valid.")
    if run.input_snapshot.get("fingerprint")!=run.input_hash or candidate.fingerprint is None: raise ValidationError("Invalid persisted candidate context.")
    refs={};citation=IntelligenceEvidenceReferenceService(self.db)
-   for claim in candidate.claims:
+   for ordinal,claim in enumerate(candidate.claims):
     validate_claim_creation(claim["type"],"AI","PENDING")
-    item=IntelligenceItem(org_id=run.org_id,analysis_id=run.id,investigation_id=run.investigation_id,kind=claim["type"],origin="AI",ordinal=len([x for x in self.db.new if isinstance(x,IntelligenceItem)]),statement=claim["statement"],confidence=claim["confidence"],payload={"rationale":claim["rationale"],"missing_information":claim["missing_information"],"alternative_hypotheses":claim["alternative_hypotheses"]},review_status="PENDING")
+    item=IntelligenceItem(org_id=run.org_id,analysis_id=run.id,investigation_id=run.investigation_id,kind=claim["type"],origin="AI",ordinal=ordinal,statement=claim["statement"],confidence=claim["confidence"],payload={"rationale":claim["rationale"],"missing_information":claim["missing_information"],"alternative_hypotheses":claim["alternative_hypotheses"]},review_status="PENDING")
     self.db.add(item);self.db.flush()
     for link in claim["evidence_links"]:
      ref=refs.setdefault(link["alias"],citation._one(run,link["alias"],None))
      self.db.add(IntelligenceClaimEvidenceLink(org_id=run.org_id,investigation_id=run.investigation_id,item_id=item.id,evidence_reference_id=ref.id,role=link["role"]))
+   # Direct validated persistence is also used by schema certification and
+   # has no provider call.  Preserve null attempt timestamps in that case.
+   if run.provider_call_started_at is not None: run.provider_call_finished_at=now
    run.provider_execution_version=provider_execution_version;run.provider_request_fingerprint=provider_request_fingerprint;run.candidate_output_schema_version=CANDIDATE_SCHEMA_VERSION;run.candidate_output_fingerprint=candidate.fingerprint;run.status="COMPLETED";run.generated_at=run.execution_finished_at=now;run.lease_owner_id=run.lease_acquired_at=run.lease_heartbeat_at=run.lease_expires_at=None
    self.db.add(AuditEvent(org_id=run.org_id,investigation_id=run.investigation_id,actor_id=None,actor_type="system",action="INTELLIGENCE_RUN_COMPLETED",target_type="IntelligenceAnalysis",target_id=run.id,occurred_at=now,metadata_={"status":"COMPLETED","candidate_fingerprint":candidate.fingerprint}))
    self.db.commit();return run

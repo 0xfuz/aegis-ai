@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 from app.core.config import get_settings
 from app.modules.ai_reasoning.domain.run_dispatch import IntelligenceRunMaintenance
 from app.modules.ai_reasoning.domain.run_executor import FakeExecutionAdapter, FakeExecutionOutcome, IntelligenceRunExecutor
+from app.modules.ai_reasoning.domain.grounded_execution import GroundedIntelligenceExecutionPipeline
+from app.modules.ai_reasoning.domain.trusted_provider import OllamaCandidateProvider, OllamaReadiness, ProviderPolicy
 from app.workers.intelligence_celery import celery_app
 
 class _UnavailableAdapter(FakeExecutionAdapter):
@@ -14,7 +16,16 @@ def install_test_adapter(adapter: FakeExecutionAdapter | None) -> None:  # test-
     global _test_adapter; _test_adapter=adapter
 
 def _worker_attempt_id() -> str: return f"intelligence-worker-{uuid4().hex}"
-def _executor() -> IntelligenceRunExecutor: return IntelligenceRunExecutor(_test_adapter or _UnavailableAdapter())
+def _executor():
+    """Production chooses only trusted, configured Ollama; fakes are test-only."""
+    if _test_adapter is not None: return IntelligenceRunExecutor(_test_adapter)
+    settings=get_settings()
+    if not settings.INTELLIGENCE_PROVIDER_ENABLED: return IntelligenceRunExecutor(_UnavailableAdapter())
+    try:
+        policy=ProviderPolicy.from_settings(settings)
+        if OllamaReadiness(True,policy).check()["state"].value != "READY": return IntelligenceRunExecutor(_UnavailableAdapter())
+        return GroundedIntelligenceExecutionPipeline(OllamaCandidateProvider(policy))
+    except Exception: return IntelligenceRunExecutor(_UnavailableAdapter())
 
 @celery_app.task(name="app.workers.intelligence_tasks.execute_intelligence_run",bind=True,ignore_result=True,acks_late=True)
 def execute_intelligence_run(_task, run_id: str, protocol_version: str) -> dict[str,str]:
