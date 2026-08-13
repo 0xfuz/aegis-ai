@@ -15,12 +15,6 @@ except Exception as e:
   sleep 1
 done
 
-echo "[entrypoint] Running migrations..."
-alembic upgrade head
-
-echo "[entrypoint] Checking explicit demo seed configuration..."
-python -m app.seed.bootstrap
-
 if [ "$#" -gt 0 ]; then
   echo "[entrypoint] Starting requested process..."
   exec "$@"

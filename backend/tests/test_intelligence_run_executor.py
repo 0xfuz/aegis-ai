@@ -97,6 +97,36 @@ def test_heartbeat_checkpoint_renews_without_attempt_or_generation_change(db):
     actions=[event.action for event in db.scalars(select(AuditEvent).where(AuditEvent.target_id==row.id))]
     assert actions.count("INTELLIGENCE_RUN_HEARTBEAT")==1 and actions.count("INTELLIGENCE_RUN_COMPLETED")==1
 
+def test_cooperative_execution_survives_multiple_heartbeat_intervals_without_background_workers(db):
+    org,user,inv,clock,row=queued(db,"long-heartbeat")
+    class LongAdapter:
+        def __init__(self): self.checkpoints=0
+        def execute(self,checkpoint):
+            for _ in range(3):
+                clock.advance(20)
+                assert checkpoint()
+                self.checkpoints += 1
+            return FakeExecutionOutcome.SUCCESS
+    adapter=LongAdapter();result=executor(adapter,clock).execute(row.id,"worker-long")
+    db.refresh(row)
+    assert result.authoritative and row.status=="COMPLETED" and adapter.checkpoints==3
+    assert row.execution_attempt_count==1 and row.lease_generation==1 and row.lease_owner_id is None
+    actions=[event.action for event in db.scalars(select(AuditEvent).where(AuditEvent.target_id==row.id))]
+    assert actions.count("INTELLIGENCE_RUN_HEARTBEAT")==3
+
+def test_checkpoint_ownership_loss_prevents_terminal_persistence(db):
+    org,user,inv,clock,row=queued(db,"heartbeat-loss")
+    class LeaseLossAdapter:
+        def execute(self,checkpoint):
+            clock.advance(61)
+            assert not checkpoint()
+            return FakeExecutionOutcome.SUCCESS
+    result=executor(LeaseLossAdapter(),clock).execute(row.id,"worker-loss")
+    db.refresh(row)
+    assert not result.authoritative and result.category=="LEASE_OWNERSHIP_LOST"
+    assert row.status=="RUNNING" and row.execution_attempt_count==1
+    assert db.scalar(select(func.count()).select_from(AuditEvent).where(AuditEvent.target_id==row.id,AuditEvent.action=="INTELLIGENCE_RUN_COMPLETED"))==0
+
 def test_duplicate_executor_invocation_has_one_adapter_call_and_one_terminal_audit():
     db=SessionLocal();org,user,inv,clock,row=queued(db,"duplicate");org_id,run_id=org.id,row.id;db.close();barrier=Barrier(2);results=Queue();adapter=OutcomeAdapter()
     def invoke(index):

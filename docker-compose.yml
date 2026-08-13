@@ -51,8 +51,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis_ai}
       REDIS_URL: redis://redis:6379/0
@@ -79,6 +79,27 @@ services:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend:/app
+    networks:
+      - aegis_network
+
+  # The sole schema/bootstrap writer. API, worker and beat only start after
+  # this one-shot boundary has completed, preventing concurrent migration or
+  # seed races during a Compose bring-up.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: "no"
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed.bootstrap"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis_ai}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-CHANGE_ME_dev_only_insecure_secret}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
     networks:
       - aegis_network
 
@@ -109,6 +130,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis_ai}
       CELERY_BROKER_URL: redis://redis:6379/1
@@ -130,6 +153,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis_ai}
       CELERY_BROKER_URL: redis://redis:6379/1
