@@ -2,11 +2,14 @@ from datetime import datetime
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.modules.ai_reasoning.domain.intelligence_service import InvestigationIntelligenceService
 from app.modules.ai_reasoning.domain.run_orchestration_service import IntelligenceRunOrchestrationService
 from app.modules.ai_reasoning.infrastructure.intelligence_models import IntelligenceAnalysis
+from app.modules.ai_reasoning.domain.reconstruction_read_service import ReconstructionReadService
 from app.modules.identity.api.dependencies import Principal, require_permission
+from app.modules.identity.infrastructure.models import User
 from app.shared.database import get_db
 from app.shared.exceptions import ValidationError
 
@@ -23,6 +26,10 @@ class RunRead(BaseModel):
     context_version:str|None; builder_version:str|None; prompt_template_version:str; output_schema_version:str
     generated_at:datetime|None; created_at:datetime; updated_at:datetime; error_summary:str|None
 class RunList(BaseModel): items:list[RunRead]; limit:int; offset:int
+class ReconstructionRead(BaseModel):
+    """Strict outer contract; nested sections are fixed, server-produced JSON."""
+    model_config=ConfigDict(extra="forbid")
+    policy_id:str; investigation:dict; versions:dict; context:dict; activity:dict; gaps:dict; sections:dict; pagination:dict; warnings:list
 
 def safe_run(row: IntelligenceAnalysis) -> RunRead:
     snapshot=row.input_snapshot if isinstance(row.input_snapshot,dict) else {}
@@ -37,6 +44,12 @@ async def run(investigation_id:UUID,principal:Principal=Depends(require_permissi
 @router.get("/{investigation_id}/intelligence")
 def latest(investigation_id:UUID,principal:Principal=Depends(require_permission("investigation:read")),db:Session=Depends(get_db)):
  return InvestigationIntelligenceService(db).latest(principal.org_id,investigation_id)
+@router.get("/{investigation_id}/intelligence/reconstruction",response_model=ReconstructionRead)
+def reconstruction(investigation_id:UUID,principal:Principal=Depends(require_permission("investigation:read")),db:Session=Depends(get_db)):
+    # Token validity is necessary but insufficient: revoked/inactive users fail closed here.
+    if not db.scalar(select(User.id).where(User.id==principal.user_id,User.org_id==principal.org_id,User.is_active.is_(True))):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="Investigation not found.")
+    return ReconstructionRead.model_validate(ReconstructionReadService(db).read(principal.org_id,investigation_id))
 @router.post("/intelligence/items/{item_id}/review")
 def review(item_id:UUID,body:ReviewIn,principal:Principal=Depends(require_permission("investigation:write")),db:Session=Depends(get_db)):
  row=InvestigationIntelligenceService(db).review(principal.org_id,item_id,principal.user_id,body.status,body.rationale);return {"id":str(row.id),"review_status":row.review_status}
