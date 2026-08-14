@@ -5,20 +5,20 @@ import pytest
 from app.modules.ai_reasoning.domain.trusted_provider import (BoundedCandidateResponse, OllamaCandidateProvider, OllamaReadiness, PROMPT_VERSION, ProviderCategory, ProviderFailure, ProviderPolicy, ReadinessState, TrustedPromptRequest)
 
 def policy(**overrides):
-    values=dict(provider="ollama",base_url="http://ollama:11434",model="llama3.2",allowed_models=("llama3.2",),connect_timeout_seconds=5,read_timeout_seconds=45,total_timeout_seconds=60,max_request_bytes=1024,max_response_bytes=1024,max_concurrency=1);values.update(overrides);return ProviderPolicy(**values)
+    values=dict(provider="ollama",base_url="http://ollama:11434",model="llama3.2:latest",allowed_models=("llama3.2:latest",),connect_timeout_seconds=5,read_timeout_seconds=45,total_timeout_seconds=60,max_request_bytes=1024,max_response_bytes=1024,max_concurrency=1);values.update(overrides);return ProviderPolicy(**values)
 def request(**overrides):
     values=dict(prompt_body='{"safe":true}',idempotency_key="run-key");values.update(overrides);return TrustedPromptRequest(**values)
 def factory(handler): return lambda **kwargs: httpx.Client(transport=httpx.MockTransport(handler),**kwargs)
 
 def test_policy_defaults_are_deterministic_and_disabled_by_default():
-    settings=SimpleNamespace(INTELLIGENCE_PROVIDER="ollama",INTELLIGENCE_OLLAMA_BASE_URL="http://ollama:11434",INTELLIGENCE_OLLAMA_MODEL="llama3.2",INTELLIGENCE_OLLAMA_ALLOWED_MODELS="llama3.2",INTELLIGENCE_PROVIDER_CONNECT_TIMEOUT_SECONDS=5,INTELLIGENCE_PROVIDER_READ_TIMEOUT_SECONDS=45,INTELLIGENCE_PROVIDER_TOTAL_TIMEOUT_SECONDS=60,INTELLIGENCE_PROVIDER_MAX_REQUEST_BYTES=1024,INTELLIGENCE_PROVIDER_MAX_RESPONSE_BYTES=1024,INTELLIGENCE_PROVIDER_MAX_CONCURRENCY=2)
-    assert ProviderPolicy.from_settings(settings).model=="llama3.2" and PROMPT_VERSION=="intelligence-evidence-grounded-v1"
+    settings=SimpleNamespace(INTELLIGENCE_PROVIDER="ollama",INTELLIGENCE_OLLAMA_BASE_URL="http://ollama:11434",INTELLIGENCE_OLLAMA_MODEL="llama3.2:latest",INTELLIGENCE_OLLAMA_ALLOWED_MODELS="llama3.2:latest",INTELLIGENCE_PROVIDER_CONNECT_TIMEOUT_SECONDS=5,INTELLIGENCE_PROVIDER_READ_TIMEOUT_SECONDS=45,INTELLIGENCE_PROVIDER_TOTAL_TIMEOUT_SECONDS=60,INTELLIGENCE_PROVIDER_MAX_REQUEST_BYTES=1024,INTELLIGENCE_PROVIDER_MAX_RESPONSE_BYTES=1024,INTELLIGENCE_PROVIDER_MAX_CONCURRENCY=2)
+    assert ProviderPolicy.from_settings(settings).model=="llama3.2:latest" and PROMPT_VERSION=="intelligence-evidence-grounded-v1"
     assert OllamaReadiness(False,policy()).check()=={"state":ReadinessState.DISABLED,"category":ProviderCategory.DISABLED}
 
 @pytest.mark.parametrize("url",["https://example.com","http://169.254.169.254","http://user:pass@ollama:11434","http://ollama:11434/?x=1","http://ollama:11434/#x","ftp://ollama:11434","http://[::]/"])
 def test_policy_rejects_untrusted_provider_urls(url):
     with pytest.raises(ValueError): policy(base_url=url)
-@pytest.mark.parametrize("kwargs",[{"provider":"gemini"},{"model":"other"},{"read_timeout_seconds":61},{"max_request_bytes":0},{"max_concurrency":0}])
+@pytest.mark.parametrize("kwargs",[{"provider":"gemini"},{"model":"other"},{"model":"llama3.2:latest","allowed_models":("llama3.2",)},{"model":"llama3.2:latest:bad"},{"model":"llama3.2 latest"},{"model":"https://model"},{"read_timeout_seconds":61},{"max_request_bytes":0},{"max_concurrency":0}])
 def test_policy_rejects_unsafe_bounds_and_provider(kwargs):
     with pytest.raises(ValueError): policy(**kwargs)
 
@@ -45,7 +45,7 @@ def test_adapter_releases_concurrency_permit_after_failure_and_rejects_excess():
     semaphore.release()
 
 def test_readiness_is_non_generating_and_returns_only_safe_state_category():
-    ready=OllamaReadiness(True,policy(),client_factory=factory(lambda req:httpx.Response(200,json={"models":[{"name":"llama3.2"}]}))).check()
+    ready=OllamaReadiness(True,policy(),client_factory=factory(lambda req:httpx.Response(200,json={"models":[{"name":"llama3.2:latest"}]}))).check()
     missing=OllamaReadiness(True,policy(),client_factory=factory(lambda req:httpx.Response(200,json={"models":[]}))).check()
     assert ready=={"state":ReadinessState.READY,"category":None}
     assert missing=={"state":ReadinessState.UNAVAILABLE,"category":ProviderCategory.MODEL_UNAVAILABLE}

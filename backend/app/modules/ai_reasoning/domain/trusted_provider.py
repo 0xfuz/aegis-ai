@@ -2,6 +2,7 @@
 from __future__ import annotations
 import ipaddress
 import json
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import BoundedSemaphore
@@ -13,6 +14,7 @@ from app.core.config import get_settings
 PROTOCOL_VERSION="intelligence-run-v1"
 PROMPT_VERSION="intelligence-evidence-grounded-v1"
 CANDIDATE_SCHEMA_VERSION="intelligence-candidate-output-v1"
+_MODEL_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}(?::[a-z0-9][a-z0-9._-]{0,127})?$")
 
 class ProviderCategory(StrEnum):
     DISABLED="PROVIDER_DISABLED"; MISCONFIGURED="PROVIDER_MISCONFIGURED"; UNAVAILABLE="PROVIDER_UNAVAILABLE"; MODEL_UNAVAILABLE="PROVIDER_MODEL_UNAVAILABLE"; TIMEOUT="PROVIDER_TIMEOUT"; RESPONSE_TOO_LARGE="PROVIDER_RESPONSE_TOO_LARGE"; PROTOCOL_ERROR="PROVIDER_PROTOCOL_ERROR"; CANCELLED="PROVIDER_CANCELLED"; CONCURRENCY_LIMIT="PROVIDER_CONCURRENCY_LIMIT"; INTERNAL="PROVIDER_INTERNAL"
@@ -28,7 +30,7 @@ class ProviderPolicy:
         s=settings or get_settings(); allowed=tuple(item.strip() for item in s.INTELLIGENCE_OLLAMA_ALLOWED_MODELS.split(",") if item.strip())
         return cls(s.INTELLIGENCE_PROVIDER,s.INTELLIGENCE_OLLAMA_BASE_URL,s.INTELLIGENCE_OLLAMA_MODEL,allowed,s.INTELLIGENCE_PROVIDER_CONNECT_TIMEOUT_SECONDS,s.INTELLIGENCE_PROVIDER_READ_TIMEOUT_SECONDS,s.INTELLIGENCE_PROVIDER_TOTAL_TIMEOUT_SECONDS,s.INTELLIGENCE_PROVIDER_MAX_REQUEST_BYTES,s.INTELLIGENCE_PROVIDER_MAX_RESPONSE_BYTES,s.INTELLIGENCE_PROVIDER_MAX_CONCURRENCY)
     def __post_init__(self):
-        if self.provider != "ollama" or not self.allowed_models or self.model not in self.allowed_models or len(self.model)>255 or any(len(value)>255 for value in self.allowed_models): raise ValueError("Invalid intelligence provider policy.")
+        if self.provider != "ollama" or not self.allowed_models or self.model not in self.allowed_models or not _MODEL_NAME.fullmatch(self.model) or any(not _MODEL_NAME.fullmatch(value) for value in self.allowed_models): raise ValueError("Invalid intelligence provider policy.")
         if min(self.connect_timeout_seconds,self.read_timeout_seconds,self.total_timeout_seconds,self.max_request_bytes,self.max_response_bytes,self.max_concurrency)<=0 or self.read_timeout_seconds>self.total_timeout_seconds: raise ValueError("Invalid intelligence provider policy.")
         parsed=urlsplit(self.base_url)
         if parsed.scheme not in {"http","https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"","/"}: raise ValueError("Invalid intelligence provider policy.")
