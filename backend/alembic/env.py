@@ -19,7 +19,12 @@ from app.modules.alert_triage.infrastructure import models as alert_triage_model
 
 config = context.config
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# ``ConfigParser`` treats a percent sign as interpolation syntax.  Production
+# secret-file passwords are deliberately allowed to contain URL-escaped
+# characters (for example ``%2B``), so escape percent signs only while placing
+# the URL into Alembic's configuration.  ConfigParser resolves ``%%`` back to
+# the original URL before SQLAlchemy connects.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
