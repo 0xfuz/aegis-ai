@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Wazuh custom integration wrapper. Configuration and the ingest secret stay
+# in root-managed files; this wrapper never accepts or prints a secret.
+set -euo pipefail
+umask 077
+
+readonly CONFIG_FILE="${AEGIS_WAZUH_CONFIG_FILE:-/etc/aegis/wazuh-forwarder.conf}"
+readonly FORWARDER="${AEGIS_WAZUH_FORWARDER:-/opt/aegis/integrations/wazuh/forwarder.py}"
+
+if [[ "$#" -ne 1 || ! -r "$1" || ! -r "$CONFIG_FILE" || ! -r "$FORWARDER" ]]; then
+  exit 64
+fi
+
+# shellcheck disable=SC1090
+set -a
+source "$CONFIG_FILE"
+set +a
+
+case "${AEGIS_WAZUH_BASE_URL:-}" in
+  https://*) ;;
+  *) exit 65 ;;
+esac
+[[ -n "${AEGIS_WAZUH_INGEST_SECRET_FILE:-}" && -r "${AEGIS_WAZUH_INGEST_SECRET_FILE}" ]] || exit 66
+exec /usr/bin/python3 "$FORWARDER" "$1"

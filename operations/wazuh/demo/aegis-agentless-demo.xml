@@ -1,0 +1,8 @@
+<!-- R3 demo-only rule. Install outside production detection-rule directories. -->
+<group name="aegis_demo,">
+  <rule id="100500" level="3">
+    <match>AEGIS_R3_AGENTLESS_DEMO_LITERAL</match>
+    <description>Aegis R3 benign agentless syslog demonstration</description>
+    <group>syslog,aegis_demo,</group>
+  </rule>
+</group>
