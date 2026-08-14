@@ -47,7 +47,7 @@ def create_scope(db):
 def queued(db,key="executor"):
     org,user,inv=create_scope(db);clock=Clock();service=IntelligenceRunOrchestrationService(db,clock=clock);row=service.queue(org.id,inv.id,user.id,key);return org,user,inv,clock,row
 
-def executor(adapter,clock): return IntelligenceRunExecutor(adapter,session_factory=SessionLocal,clock=clock)
+def executor(adapter,clock,policy=None): return IntelligenceRunExecutor(adapter,session_factory=SessionLocal,clock=clock,policy=policy)
 
 def test_success_and_safe_failure_are_fenced_and_no_side_effects(db):
     org,user,inv,clock,row=queued(db);adapter=OutcomeAdapter()
@@ -75,6 +75,7 @@ def test_cancelled_and_terminal_runs_never_invoke_adapter(db):
 
 def test_controlled_cancellation_and_expiry_prevent_stale_completion(db):
     org,user,inv,clock,row=queued(db)
+    policy=IntelligenceLeasePolicy()
     def cancel():
         session=SessionLocal()
         try: IntelligenceRunOrchestrationService(session,clock=clock).cancel(org.id,row.id,user.id)
@@ -82,7 +83,7 @@ def test_controlled_cancellation_and_expiry_prevent_stale_completion(db):
     adapter=ControlledAdapter(cancel);result=executor(adapter,clock).execute(row.id,"worker-control")
     db.refresh(row);assert result.outcome==FakeExecutionOutcome.CANCELLED_OR_ABORTED and not result.authoritative and row.status=="CANCELLED" and row.lease_owner_id is None
     expired=IntelligenceRunOrchestrationService(db,clock=clock).queue(org.id,inv.id,user.id,"expiry")
-    adapter=ControlledAdapter(lambda: clock.advance(61));result=executor(adapter,clock).execute(expired.id,"worker-expired")
+    adapter=ControlledAdapter(lambda: clock.advance(policy.lease_seconds+1));result=executor(adapter,clock,policy).execute(expired.id,"worker-expired")
     db.refresh(expired);assert not result.authoritative and expired.status=="RUNNING" and expired.execution_attempt_count==1
     assert IntelligenceRunOrchestrationService(db,clock=clock).recover_expired_leases(org.id)==[expired.id]
     token=IntelligenceRunOrchestrationService(db,clock=clock).acquire_for_execution(org.id,expired.id,"worker-new")
@@ -90,24 +91,26 @@ def test_controlled_cancellation_and_expiry_prevent_stale_completion(db):
 
 def test_heartbeat_checkpoint_renews_without_attempt_or_generation_change(db):
     org,user,inv,clock,row=queued(db)
+    policy=IntelligenceLeasePolicy()
     class HeartbeatAdapter:
-        def execute(self,checkpoint): clock.advance(20);assert checkpoint();return FakeExecutionOutcome.SUCCESS
-    result=executor(HeartbeatAdapter(),clock).execute(row.id,"worker-heartbeat");db.refresh(row)
+        def execute(self,checkpoint): clock.advance(policy.heartbeat_seconds);assert checkpoint();return FakeExecutionOutcome.SUCCESS
+    result=executor(HeartbeatAdapter(),clock,policy).execute(row.id,"worker-heartbeat");db.refresh(row)
     assert result.authoritative and row.execution_attempt_count==1 and row.lease_generation==1
     actions=[event.action for event in db.scalars(select(AuditEvent).where(AuditEvent.target_id==row.id))]
     assert actions.count("INTELLIGENCE_RUN_HEARTBEAT")==1 and actions.count("INTELLIGENCE_RUN_COMPLETED")==1
 
 def test_cooperative_execution_survives_multiple_heartbeat_intervals_without_background_workers(db):
     org,user,inv,clock,row=queued(db,"long-heartbeat")
+    policy=IntelligenceLeasePolicy()
     class LongAdapter:
         def __init__(self): self.checkpoints=0
         def execute(self,checkpoint):
             for _ in range(3):
-                clock.advance(20)
+                clock.advance(policy.heartbeat_seconds)
                 assert checkpoint()
                 self.checkpoints += 1
             return FakeExecutionOutcome.SUCCESS
-    adapter=LongAdapter();result=executor(adapter,clock).execute(row.id,"worker-long")
+    adapter=LongAdapter();result=executor(adapter,clock,policy).execute(row.id,"worker-long")
     db.refresh(row)
     assert result.authoritative and row.status=="COMPLETED" and adapter.checkpoints==3
     assert row.execution_attempt_count==1 and row.lease_generation==1 and row.lease_owner_id is None
@@ -116,12 +119,13 @@ def test_cooperative_execution_survives_multiple_heartbeat_intervals_without_bac
 
 def test_checkpoint_ownership_loss_prevents_terminal_persistence(db):
     org,user,inv,clock,row=queued(db,"heartbeat-loss")
+    policy=IntelligenceLeasePolicy()
     class LeaseLossAdapter:
         def execute(self,checkpoint):
-            clock.advance(61)
+            clock.advance(policy.lease_seconds+1)
             assert not checkpoint()
             return FakeExecutionOutcome.SUCCESS
-    result=executor(LeaseLossAdapter(),clock).execute(row.id,"worker-loss")
+    result=executor(LeaseLossAdapter(),clock,policy).execute(row.id,"worker-loss")
     db.refresh(row)
     assert not result.authoritative and result.category=="LEASE_OWNERSHIP_LOST"
     assert row.status=="RUNNING" and row.execution_attempt_count==1
