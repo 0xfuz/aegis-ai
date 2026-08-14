@@ -3,9 +3,10 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class IntelligenceLeasePolicy:
-    version: str = "intelligence-lease-v1"
-    lease_seconds: int = 60
-    heartbeat_seconds: int = 20
+    version: str = "intelligence-lease-v2"
+    # provider-timeout-v2 total bound is 105 seconds; this fenced lease is larger.
+    lease_seconds: int = 150
+    heartbeat_seconds: int = 30
     max_execution_attempts: int = 3
     recovery_batch_size: int = 100
     queued_reconciliation_batch_size: int = 100

@@ -35,8 +35,8 @@ def queued(db, key="run"):
     org,user,inv=scope(db);clock=Clock();service=IntelligenceRunOrchestrationService(db,clock=clock);row=service.queue(org.id,inv.id,user.id,key);return org,user,inv,clock,service,row
 
 def test_policy_is_bounded_and_rejects_invalid_values():
-    assert IntelligenceLeasePolicy().lease_seconds==60 and IntelligenceLeasePolicy().heartbeat_seconds==20 and IntelligenceLeasePolicy().max_execution_attempts==3
-    for values in ({"lease_seconds":0},{"heartbeat_seconds":60},{"max_execution_attempts":0},{"recovery_batch_size":0},{"queued_reconciliation_batch_size":1001}):
+    assert IntelligenceLeasePolicy().version=="intelligence-lease-v2" and IntelligenceLeasePolicy().lease_seconds==150 and IntelligenceLeasePolicy().heartbeat_seconds==30 and IntelligenceLeasePolicy().max_execution_attempts==3
+    for values in ({"lease_seconds":0},{"heartbeat_seconds":150},{"max_execution_attempts":0},{"recovery_batch_size":0},{"queued_reconciliation_batch_size":1001}):
         with pytest.raises(ValueError): IntelligenceLeasePolicy(**values)
 
 def test_acquire_heartbeat_complete_and_safe_failure_clear_fenced_lease(db):
@@ -44,7 +44,7 @@ def test_acquire_heartbeat_complete_and_safe_failure_clear_fenced_lease(db):
     token=service.acquire_for_execution(org.id,row.id,"worker-1")
     db.refresh(row);assert row.status=="RUNNING" and row.execution_attempt_count==1 and row.lease_generation==1 and row.execution_started_at==clock.value
     clock.advance(20);renewed=service.heartbeat_execution(org.id,row.id,"worker-1",1);db.refresh(row)
-    assert renewed["lease_expires_at"]==clock.value+timedelta(seconds=60) and row.execution_attempt_count==1 and row.lease_generation==1
+    assert renewed["lease_expires_at"]==clock.value+timedelta(seconds=150) and row.execution_attempt_count==1 and row.lease_generation==1
     completed=service.complete_execution(org.id,row.id,"worker-1",1);assert completed.status=="COMPLETED" and completed.execution_finished_at==clock.value and completed.lease_owner_id is None
     failed=service.queue(org.id,inv.id,user.id,"failed");token=service.acquire_for_execution(org.id,failed.id,"worker-2")
     failed=service.fail_execution(org.id,failed.id,"worker-2",token["lease_generation"],RuntimeError("secret sql prompt marker"))
@@ -56,13 +56,13 @@ def test_heartbeat_rejects_stale_and_non_running_leases(db,operation):
     owner,generation="worker-1",token["lease_generation"]
     if operation=="wrong-owner": owner="worker-2"
     elif operation=="wrong-generation": generation+=1
-    elif operation=="expired": clock.advance(61)
+    elif operation=="expired": clock.advance(151)
     elif operation=="cancelled": service.cancel(org.id,row.id,user.id)
     elif operation=="terminal": service.complete_execution(org.id,row.id,owner,generation)
     with pytest.raises(ValidationError): service.heartbeat_execution(org.id,row.id,owner,generation)
 
 def test_recovery_reacquisition_fences_stale_worker_and_preserves_first_start(db):
-    org,user,inv,clock,service,row=queued(db);first=service.acquire_for_execution(org.id,row.id,"worker-a");started=row.execution_started_at;clock.advance(61)
+    org,user,inv,clock,service,row=queued(db);first=service.acquire_for_execution(org.id,row.id,"worker-a");started=row.execution_started_at;clock.advance(151)
     assert service.recover_expired_leases(org.id)==[row.id];db.refresh(row);assert row.status=="QUEUED" and row.lease_owner_id is None and row.execution_attempt_count==1
     second=service.acquire_for_execution(org.id,row.id,"worker-b");db.refresh(row);assert row.execution_attempt_count==2 and second["lease_generation"]>first["lease_generation"] and row.execution_started_at==started
     with pytest.raises(ValidationError): service.complete_execution(org.id,row.id,"worker-a",first["lease_generation"])
@@ -72,7 +72,7 @@ def test_third_expired_attempt_exhausts_without_side_effects(db):
     org,user,inv,clock,service,row=queued(db)
     link_count=db.scalar(select(func.count()).select_from(IntelligenceClaimEvidenceLink))
     for attempt in range(3):
-        service.acquire_for_execution(org.id,row.id,f"worker-{attempt}");clock.advance(61);service.recover_expired_leases(org.id)
+        service.acquire_for_execution(org.id,row.id,f"worker-{attempt}");clock.advance(151);service.recover_expired_leases(org.id)
         db.refresh(row)
         if attempt < 2: assert row.status=="QUEUED"
     assert row.status=="FAILED" and row.error_summary=="EXECUTION_ATTEMPTS_EXHAUSTED" and row.execution_finished_at==clock.value and row.lease_owner_id is None

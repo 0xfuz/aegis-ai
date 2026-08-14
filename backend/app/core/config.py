@@ -84,8 +84,10 @@ class Settings(BaseSettings):
     INTELLIGENCE_OLLAMA_MODEL: str = "llama3.2:latest"
     INTELLIGENCE_OLLAMA_ALLOWED_MODELS: str = "llama3.2:latest"
     INTELLIGENCE_PROVIDER_CONNECT_TIMEOUT_SECONDS: int = 5
-    INTELLIGENCE_PROVIDER_READ_TIMEOUT_SECONDS: int = 45
-    INTELLIGENCE_PROVIDER_TOTAL_TIMEOUT_SECONDS: int = 60
+    # provider-timeout-v2: measured local llama3.2:latest response completes
+    # within 55.607s; these fixed bounds leave finite headroom without caller control.
+    INTELLIGENCE_PROVIDER_READ_TIMEOUT_SECONDS: int = 90
+    INTELLIGENCE_PROVIDER_TOTAL_TIMEOUT_SECONDS: int = 105
     INTELLIGENCE_PROVIDER_MAX_REQUEST_BYTES: int = 262144
     INTELLIGENCE_PROVIDER_MAX_RESPONSE_BYTES: int = 262144
     INTELLIGENCE_PROVIDER_MAX_CONCURRENCY: int = 2
