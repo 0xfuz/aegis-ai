@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from app.modules.ai_reasoning.domain.run_dispatch import IntelligenceRunDispatcher, IntelligenceRunMaintenance
 from app.modules.ai_reasoning.domain.lease_policy import IntelligenceLeasePolicy
 from app.modules.ai_reasoning.domain.run_orchestration_service import IntelligenceRunOrchestrationService
@@ -13,6 +13,7 @@ from app.modules.identity.infrastructure.models import Organization, Role, User
 from app.modules.investigations.infrastructure.models import Investigation, InvestigationStatus, Severity
 from app.shared.database import SessionLocal
 from app.workers import intelligence_tasks
+from app.modules.ai_reasoning.domain.grounded_execution import GroundedResult
 
 SETTINGS=SimpleNamespace(INTELLIGENCE_EXECUTION_ENABLED=True,INTELLIGENCE_DISPATCH_ENABLED=True,INTELLIGENCE_TASK_PROTOCOL_VERSION="intelligence-run-v1",INTELLIGENCE_QUEUE_MIN_AGE_SECONDS=15)
 @pytest.fixture()
@@ -50,3 +51,33 @@ def test_task_uses_internal_identity_and_explicit_test_adapter_only(db,monkeypat
         result=intelligence_tasks.execute_intelligence_run.run(str(row.id),"intelligence-run-v1")
     finally: intelligence_tasks.install_test_adapter(None)
     db.refresh(row);assert result["category"]=="SUCCESS" and calls==[True] and row.status=="COMPLETED" and row.lease_owner_id is None
+
+@pytest.mark.parametrize(("result","expected"),[
+    (GroundedResult(uuid4(),None,True),"COMPLETED"),
+    (GroundedResult(uuid4(),"PROVIDER_TIMEOUT",True),"PROVIDER_TIMEOUT"),
+    (GroundedResult(uuid4(),"LEASE_OWNERSHIP_LOST",False),"LEASE_OWNERSHIP_LOST"),
+])
+def test_task_maps_grounded_results_to_bounded_safe_categories(db,monkeypatch,result,expected):
+    org,user,inv,row=queued(db,"grounded-return")
+    class Executor:
+        def execute(self,run_id,owner): return GroundedResult(run_id,result.category,result.authoritative)
+    monkeypatch.setattr(intelligence_tasks,"get_settings",lambda: SETTINGS)
+    monkeypatch.setattr(intelligence_tasks,"_executor",lambda: Executor())
+    assert intelligence_tasks.execute_intelligence_run.run(str(row.id),"intelligence-run-v1")=={"category":expected}
+    db.refresh(row)
+    assert row.status=="QUEUED"
+
+def test_terminal_redelivery_returns_safe_category_without_new_authority_mutation(db,monkeypatch):
+    org,user,inv,row=queued(db,"terminal-redelivery")
+    service=IntelligenceRunOrchestrationService(db)
+    token=service.acquire_for_execution(org.id,row.id,"first-worker")
+    service.complete_execution(org.id,row.id,"first-worker",token["lease_generation"])
+    before_audits=db.scalar(select(func.count()).select_from(AuditEvent).where(AuditEvent.target_id==row.id))
+    class Executor:
+        def execute(self,run_id,owner): return GroundedResult(run_id,"LEASE_OWNERSHIP_LOST",False)
+    monkeypatch.setattr(intelligence_tasks,"get_settings",lambda: SETTINGS)
+    monkeypatch.setattr(intelligence_tasks,"_executor",lambda: Executor())
+    assert intelligence_tasks.execute_intelligence_run.run(str(row.id),"intelligence-run-v1")=={"category":"LEASE_OWNERSHIP_LOST"}
+    db.refresh(row)
+    after_audits=db.scalar(select(func.count()).select_from(AuditEvent).where(AuditEvent.target_id==row.id))
+    assert row.status=="COMPLETED" and row.execution_attempt_count==1 and row.provider_attempt_count==0 and before_audits==after_audits

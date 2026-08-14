@@ -16,6 +16,23 @@ def install_test_adapter(adapter: FakeExecutionAdapter | None) -> None:  # test-
     global _test_adapter; _test_adapter=adapter
 
 def _worker_attempt_id() -> str: return f"intelligence-worker-{uuid4().hex}"
+
+def _safe_result_category(result) -> str:
+    """Return only a bounded lifecycle category from an internal executor result.
+
+    Grounded execution deliberately has no fake-executor ``outcome`` field.  The
+    task acknowledgement path must therefore never inspect provider output or
+    assume a test-only result shape after candidate persistence has committed.
+    """
+    category = getattr(result, "category", None)
+    if isinstance(category, str) and category:
+        return category
+    outcome = getattr(result, "outcome", None)
+    value = getattr(outcome, "value", outcome)
+    if isinstance(value, str) and value:
+        return value
+    return "COMPLETED" if getattr(result, "authoritative", False) else "EXECUTION_FAILED"
+
 def _executor():
     """Production chooses only trusted, configured Ollama; fakes are test-only."""
     if _test_adapter is not None: return IntelligenceRunExecutor(_test_adapter)
@@ -35,7 +52,7 @@ def execute_intelligence_run(_task, run_id: str, protocol_version: str) -> dict[
     except (TypeError,ValueError): return {"category":"TASK_PAYLOAD_REJECTED"}
     if not settings.INTELLIGENCE_EXECUTION_ENABLED: return {"category":"EXECUTION_DISABLED"}
     result=_executor().execute(parsed,_worker_attempt_id())
-    return {"category":result.category or result.outcome.value}
+    return {"category":_safe_result_category(result)}
 
 @celery_app.task(name="app.workers.intelligence_tasks.reconcile_intelligence_runs",ignore_result=True)
 def reconcile_intelligence_runs() -> dict[str,int]: return {"count":len(IntelligenceRunMaintenance().reconcile_queued_runs())}
