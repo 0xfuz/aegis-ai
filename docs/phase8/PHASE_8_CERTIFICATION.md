@@ -1,8 +1,8 @@
 # Phase 8 Certification
 
-Certified commit: pending final certification commit.  This record certifies the
-bounded Investigation Intelligence path; it does not certify autonomous
-response, arbitrary-provider operation, or production performance.
+Certified commit: the final `phase8-certified` annotated tag.  This record
+certifies the bounded Investigation Intelligence path; it does not certify
+autonomous response, arbitrary-provider operation, or production performance.
 
 ## Live-lab evidence
 
