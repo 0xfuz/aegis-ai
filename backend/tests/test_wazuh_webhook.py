@@ -71,3 +71,26 @@ def test_oversize_inactive_and_semantic_duplicate(db):
     org, connector, secret = setup(db); client = TestClient(app)
     assert client.post(f"/api/v1/ingest/wazuh/v1/{connector.id}", content=b"x" * (256 * 1024 + 1), headers={"X-Ingest-Secret": secret, "content-type": "application/json"}).status_code == 422
     db.get(Connector, connector.id).is_active = False; db.commit(); assert post(client, connector, secret, payload("sparse_valid.json")).status_code == 401
+
+
+def test_wazuh_distinct_ids_within_semantic_window_deduplicate_without_v1(db):
+    org, connector, secret = setup(db)
+    client = TestClient(app)
+    first = payload("sparse_valid.json")
+    first.update({"id": "r4-semantic-one", "timestamp": "2026-08-09T12:01:00+00:00", "agent": {"id": "001", "name": "r4-host"}})
+    duplicate = {**first, "id": "r4-semantic-two", "timestamp": "2026-08-09T12:01:30+00:00"}
+
+    accepted = post(client, connector, secret, first)
+    deduplicated = post(client, connector, secret, duplicate)
+
+    assert accepted.status_code == 201
+    assert deduplicated.status_code == 201
+    assert deduplicated.json()["deduplication_status"] == "SEMANTIC_DUPLICATE"
+    assert db.scalar(select(func.count()).select_from(AlertClusterMembership).where(
+        AlertClusterMembership.org_id == org.id,
+        AlertClusterMembership.correlation_version == CORRELATION_V2_VERSION,
+    )) == 1
+    assert db.scalar(select(func.count()).select_from(AlertClusterMembership).where(
+        AlertClusterMembership.org_id == org.id,
+        AlertClusterMembership.correlation_version == CORRELATION_VERSION,
+    )) == 0
