@@ -7,13 +7,44 @@ for local development only and are intentionally weak so they are obviously
 unsafe to run in production unchanged.
 """
 from functools import lru_cache
+from pathlib import Path
 from typing import List
+from urllib.parse import quote
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _INSECURE_JWT_DEFAULT = "CHANGE_ME_dev_only_insecure_secret"
 _INSECURE_DATABASE_MARKER = "aegis_dev_password"
+
+
+def _read_secret_file(path_value: str, *, label: str) -> str:
+    """Read one bounded Docker-secret style file without ever logging it."""
+    path = Path(path_value)
+    try:
+        info = path.stat()
+        if not path.is_file() or not 0 < info.st_size <= 4096:
+            raise ValueError
+        value = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"Production requires a valid {label} secret file.") from exc
+    value = value[:-1] if value.endswith("\n") else value
+    if not value or value.strip() != value:
+        raise ValueError(f"Production requires a valid {label} secret file.")
+    return value
+
+
+def _is_strong_secret(value: str, *, minimum_length: int) -> bool:
+    """A small deployment boundary, not a replacement password policy."""
+    if len(value) < minimum_length or value.strip() != value:
+        return False
+    classes = sum((
+        any(char.islower() for char in value),
+        any(char.isupper() for char in value),
+        any(char.isdigit() for char in value),
+        any(not char.isalnum() for char in value),
+    ))
+    return classes >= 3
 
 
 class Settings(BaseSettings):
@@ -36,6 +67,12 @@ class Settings(BaseSettings):
     DATABASE_URL: str = (
         "postgresql+psycopg2://aegis:aegis_dev_password@postgres:5432/aegis_ai"
     )
+    DATABASE_HOST: str = "postgres"
+    DATABASE_PORT: int = 5432
+    DATABASE_USER: str = "aegis"
+    DATABASE_NAME: str = "aegis_ai"
+    DATABASE_PASSWORD_FILE: str | None = None
+    JWT_SECRET_KEY_FILE: str | None = None
 
     # Used only to build the ingest URL displayed to admins when they
     # create a connector — purely cosmetic/informational, the actual
@@ -112,12 +149,21 @@ class Settings(BaseSettings):
             raise ValueError("Intelligence provider bounds are invalid.")
         if self.ENVIRONMENT.lower() != "production":
             return self
+        if not self.JWT_SECRET_KEY_FILE or not self.DATABASE_PASSWORD_FILE:
+            raise ValueError("Production requires Docker secret-file inputs for JWT and database credentials.")
+        self.JWT_SECRET_KEY = _read_secret_file(self.JWT_SECRET_KEY_FILE, label="JWT")
+        database_password = _read_secret_file(self.DATABASE_PASSWORD_FILE, label="database")
+        self.DATABASE_URL = (
+            "postgresql+psycopg2://"
+            f"{quote(self.DATABASE_USER, safe='')}:{quote(database_password, safe='')}"
+            f"@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_NAME}"
+        )
         if self.DEBUG:
             raise ValueError("Production requires DEBUG=false.")
-        if not self.JWT_SECRET_KEY or self.JWT_SECRET_KEY == _INSECURE_JWT_DEFAULT:
-            raise ValueError("Production requires an explicitly supplied non-default JWT secret.")
-        if _INSECURE_DATABASE_MARKER in self.DATABASE_URL:
-            raise ValueError("Production requires non-default database credentials.")
+        if self.JWT_SECRET_KEY == _INSECURE_JWT_DEFAULT or not _is_strong_secret(self.JWT_SECRET_KEY, minimum_length=32):
+            raise ValueError("Production requires a strong non-default JWT secret.")
+        if database_password == _INSECURE_DATABASE_MARKER or not _is_strong_secret(database_password, minimum_length=16):
+            raise ValueError("Production requires a strong non-default database password.")
         if self.SEED_DEMO_DATA:
             raise ValueError("Production must not enable demo-data seeding.")
         return self

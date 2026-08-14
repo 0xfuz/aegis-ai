@@ -1,37 +1,167 @@
 name: aegis-ai-production
 
-# Production deployment template. Supply all *_REQUIRED values through the
-# deployment secret manager; internal services deliberately have no host ports.
+# Production is intentionally private-by-default.  Put a TLS-terminating
+# reverse proxy in front of 127.0.0.1:3000/8000; do not publish internal data
+# stores or worker control surfaces.
+x-backend-environment: &backend-environment
+  ENVIRONMENT: production
+  DEBUG: "false"
+  SEED_DEMO_DATA: "false"
+  DATABASE_HOST: postgres
+  DATABASE_PORT: "5432"
+  DATABASE_USER: ${POSTGRES_USER_REQUIRED:?POSTGRES_USER_REQUIRED is required}
+  DATABASE_NAME: ${POSTGRES_DB_REQUIRED:?POSTGRES_DB_REQUIRED is required}
+  DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+  JWT_SECRET_KEY_FILE: /run/secrets/jwt_signing_secret
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  INTELLIGENCE_EXECUTION_ENABLED: ${INTELLIGENCE_EXECUTION_ENABLED:-false}
+  INTELLIGENCE_DISPATCH_ENABLED: ${INTELLIGENCE_DISPATCH_ENABLED:-false}
+  INTELLIGENCE_PROVIDER_ENABLED: ${INTELLIGENCE_PROVIDER_ENABLED:-false}
+  INTELLIGENCE_PROVIDER: ollama
+  INTELLIGENCE_OLLAMA_BASE_URL: http://ollama:11434
+  INTELLIGENCE_OLLAMA_MODEL: llama3.2:latest
+  INTELLIGENCE_OLLAMA_ALLOWED_MODELS: llama3.2:latest
+
+x-backend-secrets: &backend-secrets
+  - postgres_password
+  - jwt_signing_secret
+
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.4-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER_REQUIRED:?required}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD_REQUIRED:?required}
-      POSTGRES_DB: ${POSTGRES_DB_REQUIRED:?required}
+      POSTGRES_USER: ${POSTGRES_USER_REQUIRED:?POSTGRES_USER_REQUIRED is required}
+      POSTGRES_DB: ${POSTGRES_DB_REQUIRED:?POSTGRES_DB_REQUIRED is required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
     volumes: [aegis_postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks: [aegis_network]
+
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.2-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks: [aegis_network]
+
+  # This is the sole migration writer.  It never seeds demo data and must
+  # finish before API, worker, or beat processes start.
+  migrate:
+    build: {context: ./backend, dockerfile: Dockerfile}
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment: *backend-environment
+    secrets: *backend-secrets
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [aegis_network]
+
+  api:
+    build: {context: ./backend, dockerfile: Dockerfile}
+    restart: unless-stopped
+    environment:
+      <<: *backend-environment
+      CORS_ORIGINS_RAW: ${CORS_ORIGINS_REQUIRED:?CORS_ORIGINS_REQUIRED is required}
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL_REQUIRED:?PUBLIC_API_BASE_URL_REQUIRED is required}
+    secrets: *backend-secrets
+    volumes: [aegis_evidence_data:/app/storage/evidence]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [aegis_network]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL_REQUIRED:?NEXT_PUBLIC_API_URL_REQUIRED is required}
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL_REQUIRED:?NEXT_PUBLIC_API_URL_REQUIRED is required}
+    depends_on:
+      api: {condition: service_healthy}
+    ports: ["127.0.0.1:${FRONTEND_PORT:-3000}:3000"]
+    networks: [aegis_network]
+
+  intelligence-worker:
+    build: {context: ./backend, dockerfile: Dockerfile}
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.intelligence_celery:celery_app", "worker", "--loglevel=INFO", "--queues=intelligence-execution"]
+    environment: *backend-environment
+    secrets: *backend-secrets
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    networks: [aegis_network]
+
+  intelligence-beat:
+    build: {context: ./backend, dockerfile: Dockerfile}
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.intelligence_celery:celery_app", "beat", "--loglevel=INFO"]
+    environment: *backend-environment
+    secrets: *backend-secrets
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    networks: [aegis_network]
+
+  # Runtime only: the model volume is never initialized or changed by Compose.
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama@sha256:4dea9fb511947e24a84237bb636b0203abcb2ff0d3fbc7b4ff865deb91362131
+    profiles: ["ollama"]
+    restart: unless-stopped
     volumes: [aegis_ollama_data:/root/.ollama]
     networks: [aegis_network]
-  backend:
+
+  # Operator invoked only: never part of normal bring-up and never retries.
+  admin-bootstrap:
     build: {context: ./backend, dockerfile: Dockerfile}
-    depends_on: [postgres, redis]
-    environment:
-      ENVIRONMENT: production
-      DEBUG: "false"
-      SEED_DEMO_DATA: "false"
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY_REQUIRED:?required}
-      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER_REQUIRED:?required}:${POSTGRES_PASSWORD_REQUIRED:?required}@postgres:5432/${POSTGRES_DB_REQUIRED:?required}
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+    profiles: ["bootstrap"]
+    restart: "no"
+    command:
+      ["python", "-m", "app.modules.identity.cli.bootstrap_admin", "--organization-name", "${BOOTSTRAP_ORGANIZATION_NAME_REQUIRED:?BOOTSTRAP_ORGANIZATION_NAME_REQUIRED is required}", "--organization-slug", "${BOOTSTRAP_ORGANIZATION_SLUG_REQUIRED:?BOOTSTRAP_ORGANIZATION_SLUG_REQUIRED is required}", "--email", "${BOOTSTRAP_ADMIN_EMAIL_REQUIRED:?BOOTSTRAP_ADMIN_EMAIL_REQUIRED is required}", "--full-name", "${BOOTSTRAP_ADMIN_FULL_NAME_REQUIRED:?BOOTSTRAP_ADMIN_FULL_NAME_REQUIRED is required}", "--password-file", "/run/secrets/bootstrap_admin_password"]
+    environment: *backend-environment
+    secrets:
+      - postgres_password
+      - jwt_signing_secret
+      - bootstrap_admin_password
+    depends_on:
+      migrate: {condition: service_completed_successfully}
     networks: [aegis_network]
-networks: {aegis_network: {driver: bridge}}
-volumes: {aegis_postgres_data: {}, aegis_ollama_data: {}}
+
+networks:
+  aegis_network: {driver: bridge}
+
+volumes:
+  aegis_postgres_data: {}
+  aegis_evidence_data: {}
+  aegis_ollama_data: {}
+
+secrets:
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_FILE_REQUIRED:?POSTGRES_PASSWORD_FILE_REQUIRED is required}
+  jwt_signing_secret:
+    file: ${JWT_SECRET_KEY_FILE_REQUIRED:?JWT_SECRET_KEY_FILE_REQUIRED is required}
+  # /dev/null makes normal config inspection possible; bootstrap itself fails
+  # closed unless an operator provides a nonempty mounted secret file.
+  bootstrap_admin_password:
+    file: ${BOOTSTRAP_ADMIN_PASSWORD_FILE:-/dev/null}
