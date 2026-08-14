@@ -12,6 +12,7 @@ def test_wazuh_operations_uses_verified_manager_conventions_and_secret_file_only
     assert "4.9.2" in guide and "999:999" in guide and "/var/ossec/integrations" in guide
     assert "AEGIS_WAZUH_INGEST_SECRET_FILE" in guide and "decoded_as=syslog" in guide
     assert "AEGIS_WAZUH_INGEST_SECRET_FILE" in wrapper and "https://" in wrapper
+    assert 'for candidate in "$@"' in wrapper and 'exec /usr/bin/python3 "$FORWARDER" "$ALERT_FILE"' in wrapper
     assert "100500" in rule and "AEGIS_R3_AGENTLESS_DEMO_LITERAL" in rule
     assert "decoded_as" not in rule
 

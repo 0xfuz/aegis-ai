@@ -18,8 +18,11 @@ Install the repository's `integrations/wazuh/forwarder.py` as
 `operations/wazuh/custom-aegis` as `/var/ossec/integrations/custom-aegis`.
 Set both integration files `root:wazuh 0750`. Create `/etc/aegis` as
 `root:wazuh 0750`; its config and secret files are `root:wazuh 0640` (or
-`wazuh:wazuh 0600`). This gives the Wazuh process read access without making
-the credentials world-readable. Recheck these owners on package upgrades.
+`wazuh:wazuh 0600`). Create the forwarder spool root as `wazuh:wazuh 0700` so
+the unprivileged `integratord` process can create its private `pending/` and
+`quarantine/` directories. This gives the Wazuh process only the access it
+needs without making credentials or delivery records world-readable. Recheck
+these owners on package upgrades.
 
 Create `/etc/aegis/wazuh-forwarder.conf` with only non-secret settings:
 
@@ -40,7 +43,9 @@ non-loopback Aegis endpoint, use a trusted CA and leave TLS verification on.
 Add the approved Wazuh `<integration>` entry in the Manager's
 `/var/ossec/etc/ossec.conf` according to the deployed 4.9.2 configuration;
 use `custom-aegis` as the integration name and retain the Manager-provided
-alert file argument. Restart the Manager using its package/container lifecycle.
+alert file argument. Wazuh 4.9.2 appends Manager integration arguments; the
+wrapper selects the single readable alert artifact and ignores all other
+arguments. Restart the Manager using its package/container lifecycle.
 Do not invoke `forwarder.py` by hand against an Aegis endpoint as acceptance
 evidence.
 
