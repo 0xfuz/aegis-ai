@@ -62,6 +62,8 @@ def test_bootstrap_rejects_default_or_invalid_credentials_without_rows(db):
     with pytest.raises(ValidationError):
         service.bootstrap(organization_name="x", organization_slug="x", email="admin@aegis.demo", full_name="x", password=_PASSWORD)
     with pytest.raises(ValidationError):
+        service.bootstrap(organization_name="x", organization_slug="invalid-email", email="admin@r4.example.invalid", full_name="x", password=_PASSWORD)
+    with pytest.raises(ValidationError):
         service.bootstrap(organization_name="x", organization_slug="x", email="admin@release.example.com", full_name="x", password="password")
     assert db.scalar(select(func.count()).select_from(Organization)) == organizations
     assert db.scalar(select(func.count()).select_from(User)) == users

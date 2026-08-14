@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import re
 from uuid import UUID
 
+from pydantic import EmailStr, TypeAdapter, ValidationError as PydanticValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -18,7 +19,15 @@ from app.shared.exceptions import ConflictError, ValidationError
 _DEFAULT_EMAILS = {"admin@aegis.demo"}
 _DEFAULT_PASSWORDS = {"changeme123!", "aegis_dev_password", "change_me_dev_only_insecure_secret", "password", "password123", "admin"}
 _SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,98}[a-z0-9])?$")
-_EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{1,63}$")
+_EMAIL_ADAPTER = TypeAdapter(EmailStr)
+
+
+def _normalize_bootstrap_email(value: str) -> str | None:
+    """Apply the same deliverability-aware email contract as login requests."""
+    try:
+        return str(_EMAIL_ADAPTER.validate_python(value.strip())).casefold()
+    except PydanticValidationError:
+        return None
 
 
 def validate_bootstrap_password(password: str) -> None:
@@ -60,8 +69,8 @@ class ProductionAdminBootstrapService:
     def bootstrap(self, *, organization_name: str, organization_slug: str, email: str, full_name: str, password: str) -> UUID:
         if self.environment == "production" and self.demo_seed_enabled:
             raise ValidationError("Production bootstrap configuration is invalid.")
-        normalized_email, normalized_slug = email.strip().casefold(), organization_slug.strip().casefold()
-        if (not _EMAIL.fullmatch(normalized_email) or normalized_email in _DEFAULT_EMAILS or not 1 <= len(organization_name.strip()) <= 255 or not 1 <= len(full_name.strip()) <= 255 or not _SLUG.fullmatch(normalized_slug)):
+        normalized_email, normalized_slug = _normalize_bootstrap_email(email), organization_slug.strip().casefold()
+        if (not normalized_email or normalized_email in _DEFAULT_EMAILS or not 1 <= len(organization_name.strip()) <= 255 or not 1 <= len(full_name.strip()) <= 255 or not _SLUG.fullmatch(normalized_slug)):
             raise ValidationError("Bootstrap identity is invalid.")
         validate_bootstrap_password(password)
         try:
