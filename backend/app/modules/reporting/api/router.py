@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from app.modules.identity.api.dependencies import Principal, get_current_principal
+from app.modules.identity.api.dependencies import Principal, require_password_rotation_complete
 from app.modules.investigations.domain.service import InvestigationService
 from app.modules.reporting.domain.service import ReportService
 from app.shared.database import get_db
@@ -25,7 +25,7 @@ def generate_report(
     investigation_id: UUID,
     type: str = Query(default="technical", description="'executive' or 'technical'"),
     format: str = Query(default="markdown", description="'markdown' or 'pdf'"),
-    principal: Principal = Depends(get_current_principal),
+    principal: Principal = Depends(require_password_rotation_complete),
     db: Session = Depends(get_db),
 ) -> Response:
     required_permission = _REQUIRED_PERMISSION.get(type, "reports:generate_technical")

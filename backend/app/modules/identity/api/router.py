@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.modules.identity.api.dependencies import Principal, get_current_principal, require_any_role
 from app.modules.identity.api.schemas import (
     LoginRequest,
+    PasswordRotationRequest,
     RefreshRequest,
     TokenResponse,
     UserInvite,
@@ -28,12 +29,13 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     token pair. The access token is a short-lived JWT carrying the caller's
     role and flattened permission list, so downstream services never need
     a DB round trip to authorize a request."""
-    access, refresh = AuthService(db).authenticate(payload.email, payload.password)
+    access, refresh, rotation_required = AuthService(db).authenticate(payload.email, payload.password)
     db.commit()
     return TokenResponse(
         access_token=access,
         refresh_token=refresh,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        password_rotation_required=rotation_required,
     )
 
 
@@ -41,12 +43,13 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
 def refresh_token(payload: RefreshRequest, db: Session = Depends(get_db)) -> TokenResponse:
     """Exchange a valid refresh token for a new access/refresh pair. The
     presented refresh token is revoked as part of this call (rotation)."""
-    access, refresh = AuthService(db).refresh(payload.refresh_token)
+    access, refresh, rotation_required = AuthService(db).refresh(payload.refresh_token)
     db.commit()
     return TokenResponse(
         access_token=access,
         refresh_token=refresh,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        password_rotation_required=rotation_required,
     )
 
 
@@ -65,6 +68,12 @@ def get_me(
 ) -> UserRead:
     user = UserService(db).get_current_user(principal.user_id)
     return UserRead.model_validate(user)
+
+
+@auth_router.post("/password/rotate", status_code=status.HTTP_204_NO_CONTENT)
+def rotate_password(payload: PasswordRotationRequest, principal: Principal = Depends(get_current_principal), db: Session = Depends(get_db)) -> None:
+    UserService(db).rotate_own_password(principal.user_id, payload.current_password, payload.new_password)
+    db.commit()
 
 
 @users_router.get("", response_model=list[UserRead])
