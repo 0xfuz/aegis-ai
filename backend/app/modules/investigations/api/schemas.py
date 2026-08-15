@@ -201,3 +201,34 @@ class DashboardSummary(BaseModel):
     critical_open: int
     avg_false_positive_probability: float
     total_investigations: int
+
+
+class AuditActorRead(BaseModel):
+    type: str
+    id: UUID | None
+
+
+class AuditTargetRead(BaseModel):
+    type: str
+    id: UUID
+
+
+class AuditTransitionRead(BaseModel):
+    from_: str | None = Field(alias="from")
+    to: str | None
+
+
+class AuditEventRead(BaseModel):
+    id: UUID
+    event_type: str
+    occurred_at: datetime
+    actor: AuditActorRead
+    target: AuditTargetRead
+    transition: AuditTransitionRead | None
+
+
+class AuditEventPage(BaseModel):
+    items: list[AuditEventRead]
+    limit: int
+    offset: int
+    total: int

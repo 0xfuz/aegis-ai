@@ -59,9 +59,33 @@ class FindingService:
   latest=self.db.scalars(select(IntelligenceAnalysis).where(IntelligenceAnalysis.org_id==org,IntelligenceAnalysis.investigation_id==investigation).order_by(IntelligenceAnalysis.created_at.desc())).first()
   return {"evidence_count":evidence,"raw_record_count":raw,"event_count":count(Event,Event.org_id==org,Event.investigation_id==investigation),"indicator_count":indicators,"entity_count":count(Entity,Entity.org_id==org,Entity.investigation_id==investigation),"relationship_count":count(EntityRelationship,EntityRelationship.org_id==org,EntityRelationship.investigation_id==investigation),"findings_count":count(Finding,Finding.org_id==org,Finding.investigation_id==investigation),"confirmed_mitre_count":count(MitreMapping,MitreMapping.org_id==org,MitreMapping.investigation_id==investigation,MitreMapping.status=="CONFIRMED"),"latest_aiie_status":latest.status if latest else "NOT_RUN"}
  def audit(self,org,investigation,limit=100,offset=0):
+  """Return the bounded, read-only audit projection for one Investigation.
+
+  Audit rationale and arbitrary metadata can contain analyst prose or internal
+  dispatch context.  They are intentionally not an API contract.  The small
+  transition projection below is the only metadata permitted to cross this
+  boundary.
+  """
   InvestigationService(self.db).get_investigation(org,investigation)
-  rows=self.db.scalars(select(AuditEvent).where(AuditEvent.org_id==org,AuditEvent.investigation_id==investigation).order_by(AuditEvent.occurred_at.desc()).limit(limit).offset(offset))
-  return [{"id":str(x.id),"action":x.action,"target_type":x.target_type,"target_id":str(x.target_id),"occurred_at":x.occurred_at,"rationale":x.rationale,"metadata":x.metadata_} for x in rows]
+  where=(AuditEvent.org_id==org,AuditEvent.investigation_id==investigation)
+  total=self.db.scalar(select(func.count()).select_from(AuditEvent).where(*where)) or 0
+  rows=self.db.scalars(select(AuditEvent).where(*where).order_by(AuditEvent.occurred_at.desc(),AuditEvent.id.desc()).limit(limit).offset(offset))
+  return {"items":[self._audit_read(x) for x in rows],"limit":limit,"offset":offset,"total":total}
+
+ @staticmethod
+ def _audit_label(value, maximum, fallback):
+  if not isinstance(value,str) or len(value)>maximum or not value.replace("_","").replace("-","").isalnum(): return fallback
+  return value
+
+ @classmethod
+ def _audit_read(cls,row):
+  metadata=row.metadata_ if isinstance(row.metadata_,dict) else {}
+  previous=cls._audit_label(metadata.get("previous"),64,None)
+  status=cls._audit_label(metadata.get("status"),64,None)
+  transition={"from":previous,"to":status} if previous or status else None
+  return {"id":str(row.id),"event_type":cls._audit_label(row.action,100,"AUDIT_EVENT"),
+          "occurred_at":row.occurred_at,"actor":{"type":cls._audit_label(row.actor_type,50,"unknown"),"id":str(row.actor_id) if row.actor_id else None},
+          "target":{"type":cls._audit_label(row.target_type,100,"unknown"),"id":str(row.target_id)},"transition":transition}
  def _mapping(self,row):
   links=self.db.scalars(select(MitreMappingFactLink).where(MitreMappingFactLink.mapping_id==row.id))
   return {"id":str(row.id),"technique_id":row.technique_id,"technique_name":row.technique_name,"tactic":row.tactic,"confidence":row.confidence,"ai_rationale":row.ai_rationale,"status":row.status,"source_intelligence_item_id":str(row.source_intelligence_item_id) if row.source_intelligence_item_id else None,"finding_id":str(row.finding_id) if row.finding_id else None,"fact_links":[{"fact_id":str(x.fact_id),"role":x.role} for x in links]}

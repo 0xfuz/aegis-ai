@@ -15,7 +15,9 @@ from app.modules.investigations.api.schemas import (
     IOCVerdictRequest,
     IOCWatchRequest,
     NoteCreate,
+    AuditEventPage,
 )
+from app.modules.identity.infrastructure.models import User
 from app.modules.investigations.domain.service import InvestigationService, IOCService
 from app.modules.investigations.domain.finding_service import FindingService
 from app.shared.database import get_db
@@ -35,8 +37,14 @@ class MitreReviewIn(BaseModel): status: str; rationale: str = ""
 @router.get("/{investigation_id}/overview")
 def overview(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)):
     return FindingService(db).overview(principal.org_id, investigation_id)
-@router.get("/{investigation_id}/audit")
-def audit(investigation_id: UUID, limit: int = Query(default=100, le=200), offset: int = Query(default=0, ge=0), principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)):
+@router.get("/{investigation_id}/audit", response_model=AuditEventPage)
+def audit(investigation_id: UUID, limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0), principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)):
+    user = db.get(User, principal.user_id)
+    if user is None or user.org_id != principal.org_id or not user.is_active:
+        # Keep an inactive or stale principal indistinguishable from an
+        # inaccessible Investigation at this read boundary.
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found.")
     return FindingService(db).audit(principal.org_id, investigation_id, limit, offset)
 
 @router.get("/{investigation_id}/findings")
