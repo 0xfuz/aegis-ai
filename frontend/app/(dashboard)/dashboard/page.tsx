@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { apiFetch, ApiError } from "@/lib/api-client";
+import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "@/lib/api-client";
 import { Card, CardLabel, CardValue } from "@/components/ui/card";
 import { SeverityBadge } from "@/components/ui/severity-badge";
 import { ConfidenceRing } from "@/components/ui/confidence-ring";
+import { LoadingState, RetryableErrorState } from "@/components/ui/async-state";
 
 interface DashboardSummary {
   open_investigations: number;
@@ -27,7 +28,8 @@ export default function DashboardPage() {
   const [queue, setQueue] = useState<InvestigationSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setError(null);
     Promise.all([
       apiFetch<DashboardSummary>("/api/v1/investigations/dashboard-summary"),
       apiFetch<InvestigationSummary[]>("/api/v1/investigations?limit=5"),
@@ -36,21 +38,17 @@ export default function DashboardPage() {
         setSummary(summaryData);
         setQueue(queueData);
       })
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load dashboard data."));
+      .catch(() => setError("unavailable"));
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   return (
     <div>
       <h1 className="font-display text-xl font-medium text-text-primary">Dashboard</h1>
-      <p className="mt-1 text-sm text-text-muted">
-        Includes seeded mock events plus anything real ingested via a connector.
-      </p>
+      <p className="mt-1 text-sm text-text-muted">Organization-scoped operational summary.</p>
 
-      {error && (
-        <div className="mt-4 rounded border border-severity-critical/40 bg-severity-critical/10 px-3 py-2 text-sm text-severity-critical">
-          {error}
-        </div>
-      )}
+      {error && <div className="mt-4"><RetryableErrorState onRetry={load} message="Dashboard data is temporarily unavailable." /></div>}
 
       <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card>
@@ -96,9 +94,7 @@ export default function DashboardPage() {
         {queue?.length === 0 && (
           <div className="px-4 py-6 text-center text-sm text-text-muted">No investigations yet.</div>
         )}
-        {queue === null && !error && (
-          <div className="px-4 py-6 text-center text-sm text-text-muted">Loading…</div>
-        )}
+        {queue === null && !error && <div className="p-4"><LoadingState title="Loading dashboard" message="Loading the investigation queue." /></div>}
       </Card>
     </div>
   );
