@@ -19,6 +19,7 @@ const GLOBAL_SECTIONS = [
   { label: "Operations", items: [
     { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { label: "Cases", href: "/investigations", icon: ShieldAlert },
+    { label: "Alert Triage", href: "/alert-triage", icon: ShieldAlert },
   ] },
   { label: "Security / Platform", items: [
     { label: "Assets", href: "/assets", icon: ShieldAlert },

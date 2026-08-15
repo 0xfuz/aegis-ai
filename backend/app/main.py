@@ -6,6 +6,7 @@ from app.core.logging import configure_logging
 from app.modules.identity.api.router import auth_router, users_router
 from app.modules.investigations.api.router import router as investigations_router
 from app.modules.connectors.api.router import router as connectors_router, ingest_router
+from app.modules.alert_triage.api.router import router as alert_triage_router
 from app.modules.ai_reasoning.api.intelligence_router import router as intelligence_router
 from app.modules.attack_graph.api.router import router as attack_graph_router
 from app.modules.assets.api.router import router as assets_router
@@ -55,6 +56,7 @@ app.include_router(investigations_router, prefix=settings.API_V1_PREFIX)
 app.include_router(reporting_router, prefix=settings.API_V1_PREFIX)
 app.include_router(connectors_router, prefix=settings.API_V1_PREFIX)
 app.include_router(ingest_router, prefix=settings.API_V1_PREFIX)
+app.include_router(alert_triage_router, prefix=settings.API_V1_PREFIX)
 app.include_router(intelligence_router, prefix=settings.API_V1_PREFIX)
 app.include_router(attack_graph_router, prefix=settings.API_V1_PREFIX)
 app.include_router(assets_router, prefix=settings.API_V1_PREFIX)
