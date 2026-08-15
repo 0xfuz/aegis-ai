@@ -39,12 +39,12 @@ def setup(db, suffix=None):
     return org, user, connector
 
 
-def add_alert(db, org, connector, source_id, observed):
+def add_alert(db, org, connector, source_id, observed, *, source="test", rule_id="rule"):
     raw = RawEvent(connector_id=connector.id, received_at=datetime.now(timezone.utc), payload={"source": source_id})
     db.add(raw); db.commit()
     return CanonicalAlertService(db).create(org.id, connector.id, raw.id, CanonicalAlertCreate(
-        source="test", source_alert_id=source_id, observed_at=observed, title="safe title", description="<script>inert</script>",
-        severity="HIGH", category="network", rule_id="rule", observables={"hostname": "host-a", "source_ip": "198.51.100.4"}, source_metadata={},
+        source=source, source_alert_id=source_id, observed_at=observed, title="safe title", description="<script>inert</script>",
+        severity="HIGH", category="network", rule_id=rule_id, observables={"hostname": "host-a", "source_ip": "198.51.100.4"}, source_metadata={},
     ))[0]
 
 
@@ -74,9 +74,24 @@ def test_read_service_is_tenant_scoped_version_exact_and_stably_paginated(db):
     assert detail["triage"] == {"id": str(assessment.id), "priority": assessment.priority, "score": assessment.score, "version": assessment.scoring_version}
     assert detail["promotion_eligible"] and detail["promotion_reason"] == "ELIGIBLE"
     assert detail["members"] and {row["score"] for row in detail["members"]} != {1}
+    assert detail["members"][0]["detection_label"] == "Rule rule"
+    assert "description" not in detail["members"][0] and "normalized_observables" not in detail["members"][0]
     assert AlertClusterTriageReadService(db).list(org.id, 1, 0) == AlertClusterTriageReadService(db).list(org.id, 1, 0)
     other_org, _other_user, _other_connector = setup(db)
     assert AlertClusterTriageReadService(db).list(other_org.id, 100, 0) == []
+
+
+def test_member_projection_distinguishes_wazuh_rules_and_bounds_hostile_fields(db):
+    org, _user, connector = setup(db); now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    first = add_alert(db, org, connector, "wazuh-100500", now, source="wazuh", rule_id="100500")
+    second = add_alert(db, org, connector, "wazuh-502", now + timedelta(seconds=1), source="wazuh", rule_id="502")
+    first_cluster = AlertCorrelationV2Service(db).process(org.id, first.id)
+    second_cluster = AlertCorrelationV2Service(db).process(org.id, second.id)
+    first_detail = AlertClusterTriageReadService(db).get(org.id, first_cluster.id)
+    second_detail = AlertClusterTriageReadService(db).get(org.id, second_cluster.id)
+    assert first_detail["members"][0]["detection_label"] == "Wazuh rule 100500"
+    assert second_detail["members"][0]["detection_label"] == "Wazuh rule 502"
+    assert all("<script>" not in str(member) for member in first_detail["members"] + second_detail["members"])
 
 
 def test_api_enforces_permissions_scope_pagination_and_strict_body(db):

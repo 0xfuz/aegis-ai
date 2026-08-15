@@ -14,7 +14,14 @@ type Cluster = {
   id: string; correlation_version: string; status: string; member_count: number;
   triage: Triage | null; promotion: Promotion | null;
   promotion_eligible: boolean; promotion_reason: string;
-  members?: { id: string; score: number; reasons: unknown[]; added_at: string }[];
+  members?: Member[];
+};
+type Member = {
+  id: string; score: number; reason_codes: string[]; added_at: string;
+  source?: string | null; detection_label?: string; rule_id?: string | null;
+  category?: string | null; severity?: string | null; observed_at?: string;
+  hostname?: string | null; agent_identity?: string | null;
+  semantic_duplicate?: boolean; occurrence_count?: number; unavailable?: boolean;
 };
 
 function safeError(error: unknown, fallback: string): ApiError {
@@ -65,7 +72,8 @@ export default function AlertTriagePage() {
     <div className="mt-4 space-y-3" aria-label="Alert clusters">
       {rows?.map((cluster) => <Card key={cluster.id}>
         <div className="flex flex-wrap items-center justify-between gap-3"><div>
-          <h2 className="font-medium">Cluster {cluster.id}</h2>
+          <h2 className="font-medium">{cluster.members?.[0]?.detection_label ?? "Persisted alert cluster"}</h2>
+          <p className="text-xs text-text-muted">Cluster {cluster.id}</p>
           <p className="text-sm text-text-muted">{cluster.correlation_version} · {cluster.member_count} persisted member{cluster.member_count === 1 ? "" : "s"} · {cluster.triage ? `${cluster.triage.priority} / ${cluster.triage.score} (${cluster.triage.version})` : "No persisted triage"}</p>
           <p className="mt-1 text-xs text-text-muted">Status: {cluster.promotion?.status ?? cluster.promotion_reason}</p>
         </div><div className="flex flex-wrap items-center gap-2">
@@ -78,6 +86,21 @@ export default function AlertTriagePage() {
         </div></div>
       </Card>)}
     </div>
-    {selected && <Card className="mt-4" aria-live="polite"><h2 className="font-medium">Cluster detail</h2><p className="text-sm text-text-muted">{selected.members?.length ?? 0} persisted members returned for {selected.correlation_version}.</p></Card>}
+    {selected && <Card className="mt-4" aria-live="polite">
+      <h2 className="font-medium">Cluster detail</h2>
+      <p className="text-sm text-text-muted">{selected.members?.length ?? 0} persisted members returned for {selected.correlation_version}, in server order.</p>
+      <ul className="mt-3 space-y-3" aria-label="Persisted cluster members">
+        {selected.members?.map((member) => <li key={member.id} className="rounded border border-hairline p-3">
+          <h3 className="font-medium">{member.detection_label ?? "Persisted detection"}</h3>
+          {member.unavailable ? <p className="text-sm text-text-muted">Member details are unavailable in this organization.</p> : <>
+            <p className="text-sm text-text-muted">{member.source ?? "Unknown source"} · {member.category ?? "Uncategorized"} · {member.severity ?? "Unrated"} · score {member.score}</p>
+            <p className="text-sm text-text-muted">Observed: {member.observed_at ?? "Unavailable"}</p>
+            {(member.hostname || member.agent_identity) && <p className="text-sm text-text-muted">Host: {member.hostname ?? "Unavailable"}{member.agent_identity ? ` · Agent: ${member.agent_identity}` : ""}</p>}
+            <p className="text-sm text-text-muted">Occurrences: {member.occurrence_count ?? 0}{member.semantic_duplicate ? " · Semantic duplicate recorded" : ""}</p>
+            {member.reason_codes.length > 0 && <p className="text-sm text-text-muted">Persisted reasons: {member.reason_codes.join(", ")}</p>}
+          </>}
+        </li>)}
+      </ul>
+    </Card>}
   </div>;
 }

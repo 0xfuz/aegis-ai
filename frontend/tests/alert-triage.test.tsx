@@ -24,12 +24,14 @@ describe("Alert triage surface", () => {
   afterEach(cleanup);
 
   it("renders the server ordered list, safe detail and accessible confirmation", async () => {
-    state.apiFetch.mockResolvedValueOnce([cluster]).mockResolvedValueOnce({ ...cluster, members: [{ id: "m1", score: 1, reasons: [], added_at: "now" }] });
+    state.apiFetch.mockResolvedValueOnce([{ ...cluster, members: [{ id: "m1", score: 1, reason_codes: ["INITIAL_CLUSTER"], added_at: "now", detection_label: "Wazuh rule 100500", source: "wazuh", category: "auth", severity: "HIGH", observed_at: "2026-01-01T00:00:00Z", hostname: "host-a", occurrence_count: 1 }] }]).mockResolvedValueOnce({ ...cluster, members: [{ id: "m1", score: 1, reason_codes: ["INITIAL_CLUSTER"], added_at: "now", detection_label: "Wazuh rule 100500", source: "wazuh", category: "auth", severity: "HIGH", observed_at: "2026-01-01T00:00:00Z", hostname: "host-a", occurrence_count: 1 }, { id: "m2", score: 1, reason_codes: [], added_at: "now", detection_label: "Wazuh rule 502", source: "wazuh", category: "auth", severity: "LOW", observed_at: "2026-01-01T00:00:01Z", occurrence_count: 1 }] });
     render(<AlertTriagePage />);
     expect(await screen.findByText("Cluster cluster<safe>")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Promote to Investigation" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "View details" }));
     expect(await screen.findByText("Cluster detail")).toBeInTheDocument();
+    expect(screen.getAllByText("Wazuh rule 100500").length).toBeGreaterThan(0);
+    expect(screen.getByText("Wazuh rule 502")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Promote to Investigation" }));
     expect(screen.getByRole("button", { name: "Confirm promotion" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
