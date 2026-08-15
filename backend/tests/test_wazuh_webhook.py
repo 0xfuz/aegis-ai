@@ -51,7 +51,7 @@ def test_raw_provenance_mitre_replay_and_no_authority_side_effects(db):
     alert = db.get(CanonicalAlert, first.json()["canonical_alert_id"]); raw = db.get(RawEvent, alert.raw_event_id)
     after = {m.__name__: db.scalar(select(func.count()).select_from(m).where(m.org_id == org.id)) for m in models}
     assert first.status_code == 201 and replay.status_code == 200 and replay.json()["status"] == "replayed"
-    assert raw.payload == body and alert.source_metadata["wazuh"]["mitre"]["id"] == ["T1543.003"] and after == before
+    assert raw.payload == body and alert.rule_id == str(body["rule"]["id"]) and alert.source_metadata["wazuh"]["mitre"]["id"] == ["T1543.003"] and after == before
     assert db.scalar(select(func.count()).select_from(CanonicalAlertOccurrence).where(CanonicalAlertOccurrence.canonical_alert_id == alert.id)) == 2
     assert db.scalar(select(func.count()).select_from(AlertClusterAssessment).where(AlertClusterAssessment.org_id == org.id)) == 1
 

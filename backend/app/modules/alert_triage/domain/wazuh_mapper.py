@@ -4,6 +4,7 @@ This module has no database, HTTP, connector, or downstream-service dependency.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError
@@ -48,6 +49,7 @@ _CATEGORY_GROUPS = (
     ("ids", "network"),
 )
 _NETWORK_DECODERS = {"json", "suricata", "zeek", "network"}
+_RULE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 def map_wazuh_alert(payload: dict[str, Any]) -> CanonicalAlertCreate:
@@ -67,9 +69,13 @@ def map_wazuh_alert(payload: dict[str, Any]) -> CanonicalAlertCreate:
     if alert.rule.level is None or not isinstance(alert.rule.level, int) or not 0 <= alert.rule.level <= 16:
         raise WazuhMappingError("Wazuh rule.level must be an integer from 0 through 16.")
 
-    rule_id = _text(alert.rule.id, 255)
+    # Wazuh's supported rule.id is the authoritative detector identity.  It
+    # belongs in CanonicalAlert.rule_id, not an unbounded metadata blob.
+    rule_id = _wazuh_rule_id(alert.rule.id)
+    if rule_id is None:
+        raise WazuhMappingError("Wazuh rule.id is required and must be a bounded identifier.")
     description = _text(alert.rule.description, 10_000) or ""
-    title = _text(alert.rule.description, 255) or (f"Wazuh rule {rule_id}" if rule_id else "Wazuh alert")
+    title = _text(alert.rule.description, 255) or f"Wazuh rule {rule_id}"
     profile = (_text(_get(alert.decoder, "name"), 100) or "unknown").casefold()
     groups = tuple(sorted({_text(item, 100) for item in alert.rule.groups if _text(item, 100)}))
     diagnostics: list[str] = []
@@ -85,7 +91,7 @@ def map_wazuh_alert(payload: dict[str, Any]) -> CanonicalAlertCreate:
         return CanonicalAlertCreate(
             source="wazuh", source_alert_id=source_alert_id, observed_at=alert.timestamp,
             title=title, description=description, severity=_severity(alert.rule.level), category=_category(groups),
-            rule_id=rule_id, rule_name=title, signature=f"wazuh:{rule_id}" if rule_id else None,
+            rule_id=rule_id, rule_name=title, signature=f"wazuh:{rule_id}",
             observables=observables, source_metadata=metadata, normalizer_version="wazuh-alert-v1",
         )
     except PydanticValidationError as exc:
@@ -160,6 +166,11 @@ def _text(value: Any, maximum: int) -> str | None:
     if not isinstance(value, (str, int)): return None
     text = str(value).strip()
     return text if text and len(text) <= maximum else None
+
+
+def _wazuh_rule_id(value: Any) -> str | None:
+    text = _text(value, 128)
+    return text if text and _RULE_ID.fullmatch(text) else None
 
 
 def _get(value: _WazuhObject | None, key: str) -> Any:
