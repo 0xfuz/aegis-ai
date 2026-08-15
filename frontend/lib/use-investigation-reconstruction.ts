@@ -11,7 +11,7 @@ export type ReconstructionLoadState =
 
 const initialState: ReconstructionLoadState = { status: "idle", data: null, error: null };
 
-export function useInvestigationReconstruction(investigationId: unknown) {
+export function useInvestigationReconstruction(investigationId: unknown, runId?: string | null) {
   const [state, setState] = useState<ReconstructionLoadState>(initialState);
   const [retryNonce, setRetryNonce] = useState(0);
   const requestSequence = useRef(0);
@@ -25,7 +25,7 @@ export function useInvestigationReconstruction(investigationId: unknown) {
     }
 
     setState({ status: "loading", data: null, error: null });
-    void fetchInvestigationReconstruction(investigationId, { signal: controller.signal })
+    void fetchInvestigationReconstruction(investigationId, { signal: controller.signal, runId })
       .then((data) => {
         if (!controller.signal.aborted && sequence === requestSequence.current) {
           setState({ status: "ready", data, error: null });
@@ -43,7 +43,7 @@ export function useInvestigationReconstruction(investigationId: unknown) {
       });
 
     return () => controller.abort();
-  }, [investigationId, retryNonce]);
+  }, [investigationId, retryNonce, runId]);
 
   const retry = useCallback(() => setRetryNonce((value) => value + 1), []);
   return { ...state, retry };

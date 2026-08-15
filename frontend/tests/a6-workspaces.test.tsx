@@ -67,7 +67,12 @@ describe("A6 workspaces", () => {
 
   it("only exposes conversion for confirmed eligible intelligence and reloads after conversion", async () => {
     const analysis = { status: "COMPLETED", generated_at: null, items: [{ id: "a", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "confirmed", confidence: 80, review_status: "CONFIRMED", fact_links: [{ fact_id: "event-1", role: "SUPPORTS" }] }, { id: "u", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "unreviewed", confidence: 80, review_status: "PENDING", fact_links: [] }, { id: "r", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "rejected", confidence: 80, review_status: "REJECTED", fact_links: [] }] };
-    state.apiFetch.mockResolvedValueOnce(analysis).mockResolvedValueOnce({ items: [], limit: 20, offset: 0 }).mockResolvedValueOnce({}).mockResolvedValueOnce(analysis);
+    state.apiFetch.mockImplementation((path: string) => {
+      if (path.endsWith("/intelligence/runs?limit=20&offset=0")) return Promise.resolve({ items: [], limit: 20, offset: 0 });
+      if (path.endsWith("/intelligence/items/a/finding")) return Promise.resolve({});
+      if (path.endsWith("/intelligence")) return Promise.resolve(analysis);
+      return Promise.resolve({});
+    });
     render(<IntelligencePage />);
     fireEvent.click(await screen.findByText("Observation"));
     expect(screen.getAllByText("Convert to Finding")).toHaveLength(1);
@@ -79,7 +84,12 @@ describe("A6 workspaces", () => {
 
   it("surfaces an intelligence conversion API failure", async () => {
     const analysis = { status: "COMPLETED", generated_at: null, items: [{ id: "a", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "confirmed", confidence: 80, review_status: "CONFIRMED", fact_links: [] }] };
-    state.apiFetch.mockResolvedValueOnce(analysis).mockResolvedValueOnce({ items: [], limit: 20, offset: 0 }).mockRejectedValueOnce(new ApiError("conversion failed", 422));
+    state.apiFetch.mockImplementation((path: string) => {
+      if (path.endsWith("/intelligence/runs?limit=20&offset=0")) return Promise.resolve({ items: [], limit: 20, offset: 0 });
+      if (path.endsWith("/intelligence/items/a/finding")) return Promise.reject(new ApiError("conversion failed", 422));
+      if (path.endsWith("/intelligence")) return Promise.resolve(analysis);
+      return Promise.resolve({});
+    });
     render(<IntelligencePage />);
     fireEvent.click(await screen.findByText("Observation"));
     fireEvent.click(screen.getByText("Convert to Finding"));

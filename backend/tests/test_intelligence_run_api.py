@@ -113,3 +113,19 @@ def test_running_cancel_failed_retry_safe_metadata_and_pagination(db):
     assert failed["error_summary"]=="EXECUTION_FAILED" and "input_snapshot" not in failed and "sensitive" not in str(failed)
     assert client.post(f"{base(inv)}/{two}/retry",json={"request_key":"failed-retry"},headers=auth).status_code==202
     assert client.get(f"{base(inv)}/not-a-uuid",headers=auth).status_code==422
+
+
+def test_selected_run_claim_read_is_scoped_and_latest_failure_does_not_hide_completed_claims(db):
+    org,user,inv=scope(db);other,other_user,other_inv=scope(db);client=TestClient(app);auth=headers(user,org,["investigation:read","investigation:write"])
+    service=IntelligenceRunOrchestrationService(db)
+    completed=client.post(base(inv),json={"request_key":"completed"},headers=auth).json()["id"]
+    service.acquire(org.id,completed);service.complete(org.id,completed)
+    db.add(IntelligenceItem(org_id=org.id,investigation_id=inv.id,analysis_id=completed,kind="OBSERVATION",origin="AI",ordinal=0,statement="safe",payload={},review_status="PENDING"));db.commit()
+    failed=client.post(base(inv),json={"request_key":"failed"},headers=auth).json()["id"]
+    service.acquire(org.id,failed);service.fail(org.id,failed,RuntimeError("safe"))
+    latest=client.get(f"/api/v1/investigations/{inv.id}/intelligence",headers=auth).json()
+    selected=client.get(f"/api/v1/investigations/{inv.id}/intelligence?run_id={completed}",headers=auth)
+    assert latest["id"]==failed and latest["status"]=="FAILED" and latest["items"]==[]
+    assert selected.status_code==200 and selected.json()["id"]==completed and len(selected.json()["items"])==1
+    foreign=client.post(base(other_inv),json={"request_key":"foreign"},headers=headers(other_user,other,["investigation:read","investigation:write"])).json()["id"]
+    assert client.get(f"/api/v1/investigations/{inv.id}/intelligence?run_id={foreign}",headers=auth).status_code==404

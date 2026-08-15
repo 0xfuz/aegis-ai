@@ -95,6 +95,24 @@ def test_citation_projection_preserves_many_to_many_links_and_is_bounded(db):
     assert "claim_role" not in citations["E1"] and str(event.id) not in json.dumps(citations)
 
 
+def test_selected_run_citations_are_not_mixed_with_other_completed_runs(db):
+    org, investigation, analysis, evidence, _event, _promotion, _cluster = scope(db)
+    first_item = IntelligenceItem(org_id=org.id, investigation_id=investigation.id, analysis_id=analysis.id, kind="OBSERVATION", origin="AI", ordinal=1, statement="safe", payload={}, review_status="PENDING")
+    first_reference = reference(org, investigation, analysis, "FIRST", "EVIDENCE_ITEM", evidence_item_id=evidence.id)
+    db.add_all((first_item, first_reference)); db.flush()
+    db.add(IntelligenceClaimEvidenceLink(org_id=org.id, investigation_id=investigation.id, item_id=first_item.id, evidence_reference_id=first_reference.id, role="SUPPORTS"))
+    newer = IntelligenceAnalysis(org_id=org.id, investigation_id=investigation.id, provider="test", model="test", prompt_template_version="v1", input_snapshot={}, input_hash="c" * 64, request_key=f"newer-{uuid4().hex}", output_schema_version="v1", status="COMPLETED")
+    db.add(newer); db.flush()
+    second_item = IntelligenceItem(org_id=org.id, investigation_id=investigation.id, analysis_id=newer.id, kind="OBSERVATION", origin="AI", ordinal=1, statement="safe", payload={}, review_status="PENDING")
+    second_reference = reference(org, investigation, newer, "SECOND", "EVIDENCE_ITEM", evidence_item_id=evidence.id)
+    db.add_all((second_item, second_reference)); db.flush()
+    db.add(IntelligenceClaimEvidenceLink(org_id=org.id, investigation_id=investigation.id, item_id=second_item.id, evidence_reference_id=second_reference.id, role="SUPPORTS")); db.commit()
+    selected = ReconstructionReadService(db).read(org.id, investigation.id, analysis.id)
+    newer_selected = ReconstructionReadService(db).read(org.id, investigation.id, newer.id)
+    assert [citation["alias"] for citation in selected["sections"]["citations"]] == ["FIRST"]
+    assert [citation["alias"] for citation in newer_selected["sections"]["citations"]] == ["SECOND"]
+
+
 def test_promotion_projection_uses_exact_v2_rows_redacts_reasons_and_does_not_write(db):
     org, investigation, analysis, _evidence, _event, promotion, cluster = scope(db)
     models = (IntelligenceAnalysis, IntelligenceItem, IntelligenceEvidenceReference, IntelligenceClaimEvidenceLink, AlertClusterMembership, AlertClusterAssessment, AlertClusterPromotion)

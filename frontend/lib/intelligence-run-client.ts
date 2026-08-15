@@ -22,6 +22,7 @@ export type IntelligenceRun = {
 
 type IntelligenceRunList = { items: IntelligenceRun[]; limit: number; offset: number };
 export type IntelligenceRunRequestOptions = Pick<RequestInit, "signal">;
+export type IntelligenceAnalysisRequestOptions = Pick<RequestInit, "signal">;
 
 function route(investigationId: string) {
   if (!isInvestigationRouteId(investigationId)) throw new TypeError("A non-empty Investigation ID is required.");
@@ -39,6 +40,11 @@ export function fetchIntelligenceRun(investigationId: string, runId: string, opt
 
 export function listIntelligenceRuns(investigationId: string, options: IntelligenceRunRequestOptions = {}): Promise<IntelligenceRunList> {
   return apiFetch<IntelligenceRunList>(`${route(investigationId)}?limit=20&offset=0`, options);
+}
+
+export function fetchIntelligenceAnalysis<T>(investigationId: string, runId?: string | null, options: IntelligenceAnalysisRequestOptions = {}): Promise<T> {
+  const selected = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  return apiFetch<T>(`/api/v1/investigations/${encodeURIComponent(investigationId)}/intelligence${selected}`, options);
 }
 
 export function isActiveIntelligenceRun(run: IntelligenceRun | null): boolean {

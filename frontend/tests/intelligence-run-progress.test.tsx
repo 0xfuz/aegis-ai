@@ -29,7 +29,7 @@ const run = (status: IntelligenceRun["status"], error_summary: string | null = n
 
 function Probe({ id = "case-42", onCompleted = vi.fn() }: { id?: string; onCompleted?: () => void }) {
   const state = useInvestigationIntelligenceRun(id, onCompleted);
-  return <><button onClick={() => void state.submit()} disabled={state.initializing || state.submitting || state.active}>Run analysis</button><span data-testid="run-status">{state.run?.status ?? "NONE"}</span><span data-testid="run-error">{state.error ?? ""}</span></>;
+  return <><button onClick={() => void state.submit()} disabled={state.initializing || state.submitting || state.active}>Run analysis</button><button onClick={() => state.selectCompletedRun("completed-2")}>Select completed</button><span data-testid="run-status">{state.run?.status ?? "NONE"}</span><span data-testid="latest-status">{state.latestRun?.status ?? "NONE"}</span><span data-testid="selected-run">{state.run?.id ?? "NONE"}</span><span data-testid="run-error">{state.error ?? ""}</span></>;
 }
 
 afterEach(() => {
@@ -94,5 +94,18 @@ describe("Intelligence Run progress", () => {
     await act(async () => { await Promise.resolve(); });
     expect(screen.getByTestId("run-error")).toHaveTextContent("permission");
     expect(apiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the newest failed run while selecting completed runs in server order", async () => {
+    const failed = { ...run("FAILED", "PROVIDER_TIMEOUT"), id: "failed-1" };
+    const completedOne = { ...run("COMPLETED"), id: "completed-1" };
+    const completedTwo = { ...run("COMPLETED"), id: "completed-2" };
+    apiFetch.mockResolvedValueOnce({ items: [failed, completedOne, completedTwo], limit: 20, offset: 0 });
+    render(<Probe />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByTestId("latest-status")).toHaveTextContent("FAILED");
+    expect(screen.getByTestId("selected-run")).toHaveTextContent("completed-1");
+    fireEvent.click(screen.getByRole("button", { name: "Select completed" }));
+    expect(screen.getByTestId("selected-run")).toHaveTextContent("completed-2");
   });
 });

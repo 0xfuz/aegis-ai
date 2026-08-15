@@ -46,14 +46,14 @@ async def run(investigation_id:UUID,principal:Principal=Depends(require_permissi
  IntelligenceRunDispatcher(db).dispatch_committed(row.id)
  return {"id":str(row.id),"status":row.status}
 @router.get("/{investigation_id}/intelligence")
-def latest(investigation_id:UUID,principal:Principal=Depends(require_permission("investigation:read")),db:Session=Depends(get_db)):
- return InvestigationIntelligenceService(db).latest(principal.org_id,investigation_id)
+def latest(investigation_id:UUID,run_id:UUID|None=None,principal:Principal=Depends(require_permission("investigation:read")),db:Session=Depends(get_db)):
+ return InvestigationIntelligenceService(db).latest(principal.org_id,investigation_id,run_id)
 @router.get("/{investigation_id}/intelligence/reconstruction",response_model=ReconstructionRead)
-def reconstruction(investigation_id:UUID,principal:Principal=Depends(require_permission("investigation:read")),db:Session=Depends(get_db)):
+def reconstruction(investigation_id:UUID,run_id:UUID|None=None,principal:Principal=Depends(require_permission("investigation:read")),db:Session=Depends(get_db)):
     # Token validity is necessary but insufficient: revoked/inactive users fail closed here.
     if not db.scalar(select(User.id).where(User.id==principal.user_id,User.org_id==principal.org_id,User.is_active.is_(True))):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="Investigation not found.")
-    return ReconstructionRead.model_validate(ReconstructionReadService(db).read(principal.org_id,investigation_id))
+    return ReconstructionRead.model_validate(ReconstructionReadService(db).read(principal.org_id,investigation_id,run_id))
 @router.post("/intelligence/items/{item_id}/review")
 def review(item_id:UUID,body:ReviewIn,principal:Principal=Depends(require_permission("investigation:write")),db:Session=Depends(get_db)):
  row=InvestigationIntelligenceService(db).review(principal.org_id,item_id,principal.user_id,body.status,body.rationale);return {"id":str(row.id),"review_status":row.review_status}

@@ -105,7 +105,11 @@ services:
   intelligence-worker:
     build: {context: ./backend, dockerfile: Dockerfile}
     restart: unless-stopped
-    command: ["celery", "-A", "app.workers.intelligence_celery:celery_app", "worker", "--loglevel=INFO", "--queues=intelligence-execution"]
+    # The local trusted provider is intentionally serialized.  The provider
+    # object is constructed per task, so its in-process semaphore cannot fence
+    # concurrent Celery deliveries; the dedicated worker is the authoritative
+    # execution bound.
+    command: ["celery", "-A", "app.workers.intelligence_celery:celery_app", "worker", "--loglevel=INFO", "--queues=intelligence-execution", "--concurrency=1", "--prefetch-multiplier=1"]
     environment: *backend-environment
     secrets: *backend-secrets
     depends_on:

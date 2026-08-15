@@ -149,8 +149,10 @@ class InvestigationIntelligenceService:
       for fact_id in resolve_aliases(item.supporting_facts,aliases):self.db.add(MitreMappingFactLink(org_id=org,mapping_id=mapping.id,fact_type="FACT",fact_id=fact_id,role="SUPPORTS"))
    validate_run_transition(analysis.status,"COMPLETED");analysis.status="COMPLETED";analysis.generated_at=datetime.now(timezone.utc);self.db.commit();return analysis
   except Exception as exc: validate_run_transition(analysis.status,"FAILED");analysis.status="FAILED";analysis.error_summary=str(exc)[:2000];self.db.commit();raise
- def latest(self,org:UUID,investigation:UUID):
-  row=self.db.execute(select(IntelligenceAnalysis).where(IntelligenceAnalysis.org_id==org,IntelligenceAnalysis.investigation_id==investigation).order_by(IntelligenceAnalysis.created_at.desc())).scalars().first()
+ def latest(self,org:UUID,investigation:UUID,analysis_id:UUID|None=None):
+  statement=select(IntelligenceAnalysis).where(IntelligenceAnalysis.org_id==org,IntelligenceAnalysis.investigation_id==investigation)
+  if analysis_id is not None: statement=statement.where(IntelligenceAnalysis.id==analysis_id)
+  row=self.db.execute(statement.order_by(IntelligenceAnalysis.created_at.desc())).scalars().first()
   if not row: raise NotFoundError("No investigation intelligence analysis exists.")
   items=list(self.db.execute(select(IntelligenceItem).where(IntelligenceItem.org_id==org,IntelligenceItem.analysis_id==row.id).order_by(IntelligenceItem.kind,IntelligenceItem.ordinal)).scalars()); links=list(self.db.execute(select(IntelligenceFactLink).where(IntelligenceFactLink.org_id==org,IntelligenceFactLink.item_id.in_([x.id for x in items]))).scalars()) if items else []
   return {"id":str(row.id),"status":row.status,"generated_at":row.generated_at,"items":[{"id":str(x.id),"kind":x.kind,"claim_type":canonical_claim_type(x.kind),"origin":x.origin,"statement":x.statement,"confidence":x.confidence,"payload":x.payload,"review_status":x.review_status,"fact_links":[{"fact_id":str(l.fact_id),"role":l.role} for l in links if l.item_id==x.id]} for x in items]}

@@ -124,7 +124,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    command: ["celery", "-A", "app.workers.intelligence_celery:celery_app", "worker", "--loglevel=INFO", "--queues=intelligence-execution"]
+    command: ["celery", "-A", "app.workers.intelligence_celery:celery_app", "worker", "--loglevel=INFO", "--queues=intelligence-execution", "--concurrency=1", "--prefetch-multiplier=1"]
     depends_on:
       postgres:
         condition: service_healthy

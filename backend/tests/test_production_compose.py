@@ -72,6 +72,9 @@ def test_api_has_no_redis_or_ollama_startup_dependency_and_worker_uses_certified
     worker_block = re.search(r"^  intelligence-worker:\n(.*?)(?=^  intelligence-beat:)", text, re.MULTILINE | re.DOTALL).group(1)
     assert "redis:" not in api_block and "ollama:" not in api_block
     assert "--queues=intelligence-execution" in worker_block
+    assert "--concurrency=1" in worker_block
+    assert "--prefetch-multiplier=1" in worker_block
+    assert "--queues=celery" not in worker_block
 
 
 def test_production_worker_and_beat_healthchecks_are_process_aware_not_http():

@@ -14,7 +14,7 @@ from app.modules.alert_triage.infrastructure.models import AlertCluster, AlertCl
 from app.modules.evidence.infrastructure.models import EvidenceItem, EntityObservation, EntityRelationship, Event, IndicatorOccurrence, RawRecord
 from app.modules.investigations.domain.service import InvestigationService
 from app.modules.investigations.infrastructure.models import Finding, MitreMapping
-from app.shared.exceptions import ValidationError
+from app.shared.exceptions import NotFoundError, ValidationError
 
 POLICY_ID="reconstruction-read-v1"
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class ReconstructionReadPolicy:
 
 class ReconstructionReadService:
     def __init__(self,db:Session,policy:ReconstructionReadPolicy=ReconstructionReadPolicy()): self.db,self.policy=db,policy
-    def read(self,org_id:UUID,investigation_id:UUID)->dict:
+    def read(self,org_id:UUID,investigation_id:UUID,analysis_id:UUID|None=None)->dict:
         inv=InvestigationService(self.db).get_investigation(org_id,investigation_id)
         context=ContextBuilder(self.db).build(org_id,investigation_id).snapshot
         temporal=ActivityWindowReader(self.db).reconstruct(org_id,investigation_id)
@@ -49,8 +49,21 @@ class ReconstructionReadService:
         observations=list(self.db.scalars(select(EntityObservation).where(EntityObservation.org_id==org_id,EntityObservation.investigation_id==investigation_id)))
         occurrences=list(self.db.scalars(select(IndicatorOccurrence).where(IndicatorOccurrence.org_id==org_id,IndicatorOccurrence.investigation_id==investigation_id)))
         relationships=list(self.db.scalars(select(EntityRelationship).where(EntityRelationship.org_id==org_id,EntityRelationship.investigation_id==investigation_id)))
+        citation_statement=select(IntelligenceEvidenceReference)
+        if analysis_id is not None:
+            # The selected run remains an authoritative server-scoped object.
+            # A foreign or missing run returns no evidence only after the run
+            # lookup below fails closed.
+            selected=self.db.scalar(select(IntelligenceAnalysis.id).where(
+                IntelligenceAnalysis.id==analysis_id,
+                IntelligenceAnalysis.org_id==org_id,
+                IntelligenceAnalysis.investigation_id==investigation_id,
+            ))
+            if selected is None:
+                raise NotFoundError("Intelligence run not found.")
+            citation_statement=citation_statement.where(IntelligenceEvidenceReference.analysis_id==analysis_id)
         citations=list(self.db.scalars(
-            select(IntelligenceEvidenceReference)
+            citation_statement
             .join(IntelligenceAnalysis, IntelligenceAnalysis.id==IntelligenceEvidenceReference.analysis_id)
             .where(IntelligenceEvidenceReference.org_id==org_id,
                    IntelligenceEvidenceReference.investigation_id==investigation_id,

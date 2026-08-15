@@ -90,7 +90,7 @@ export type InvestigationReconstruction = {
   warnings: ReconstructionWarning[];
 };
 
-export type ReconstructionRequestOptions = Pick<RequestInit, "signal">;
+export type ReconstructionRequestOptions = Pick<RequestInit, "signal"> & { runId?: string | null };
 
 export function isInvestigationRouteId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -103,8 +103,9 @@ export function fetchInvestigationReconstruction(
   if (!isInvestigationRouteId(investigationId)) {
     return Promise.reject(new TypeError("A non-empty Investigation ID is required."));
   }
+  const { runId, ...requestOptions } = options;
   return apiFetch<InvestigationReconstruction>(
-    `/api/v1/investigations/${encodeURIComponent(investigationId)}/intelligence/reconstruction`,
-    options,
+    `/api/v1/investigations/${encodeURIComponent(investigationId)}/intelligence/reconstruction${runId ? `?run_id=${encodeURIComponent(runId)}` : ""}`,
+    requestOptions,
   );
 }

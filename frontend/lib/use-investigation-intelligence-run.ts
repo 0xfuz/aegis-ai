@@ -38,6 +38,8 @@ export function useInvestigationIntelligenceRun(
   onCompleted: () => void | Promise<void>,
 ) {
   const [run, setRun] = useState<IntelligenceRun | null>(null);
+  const [runs, setRuns] = useState<IntelligenceRun[]>([]);
+  const [latestRun, setLatestRun] = useState<IntelligenceRun | null>(null);
   const [initializing, setInitializing] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,12 +69,17 @@ export function useInvestigationIntelligenceRun(
       .then((result) => {
         if (controller.signal.aborted || sequence !== requestSequence.current) return;
         const active = result.items.find((candidate) => isActiveIntelligenceRun(candidate)) ?? null;
-        setRun(active);
+        const completed = result.items.find((candidate) => candidate.status === "COMPLETED") ?? null;
+        setRuns(result.items);
+        setLatestRun(result.items[0] ?? null);
+        setRun(active ?? completed);
         setInitializing(false);
       })
       .catch((nextError: unknown) => {
         if (controller.signal.aborted || sequence !== requestSequence.current) return;
         setRun(null);
+        setRuns([]);
+        setLatestRun(null);
         setInitializing(false);
         setError(errorMessage(nextError));
       });
@@ -89,6 +96,8 @@ export function useInvestigationIntelligenceRun(
         const next = await fetchIntelligenceRun(investigationId, activeRun.id, { signal: controller.signal });
         if (controller.signal.aborted) return;
         setRun(next);
+        setLatestRun((current) => current?.id === next.id ? next : current);
+        setRuns((current) => current.map((candidate) => candidate.id === next.id ? next : candidate));
         setError(null);
         notifyCompletion(next);
         if (isActiveIntelligenceRun(next)) timeout = setTimeout(() => void poll(), POLL_INTERVAL_MS);
@@ -112,6 +121,8 @@ export function useInvestigationIntelligenceRun(
     try {
       const queued = await queueIntelligenceRun(investigationId, createIntelligenceRunRequestKey());
       setRun(queued);
+      setLatestRun(queued);
+      setRuns((current) => [queued, ...current.filter((candidate) => candidate.id !== queued.id)]);
     } catch (nextError: unknown) {
       setError(errorMessage(nextError));
     } finally {
@@ -122,10 +133,16 @@ export function useInvestigationIntelligenceRun(
 
   return {
     run,
+    runs,
+    latestRun,
     error,
     initializing,
     submitting,
-    active: isActiveIntelligenceRun(run),
+    active: runs.some((candidate) => isActiveIntelligenceRun(candidate)),
+    selectCompletedRun: (runId: string) => {
+      const selected = runs.find((candidate) => candidate.id === runId && candidate.status === "COMPLETED");
+      if (selected) setRun(selected);
+    },
     submit,
   };
 }
