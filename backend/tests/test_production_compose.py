@@ -72,3 +72,15 @@ def test_api_has_no_redis_or_ollama_startup_dependency_and_worker_uses_certified
     worker_block = re.search(r"^  intelligence-worker:\n(.*?)(?=^  intelligence-beat:)", text, re.MULTILINE | re.DOTALL).group(1)
     assert "redis:" not in api_block and "ollama:" not in api_block
     assert "--queues=intelligence-execution" in worker_block
+
+
+def test_production_worker_and_beat_healthchecks_are_process_aware_not_http():
+    text = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    worker_block = re.search(r"^  intelligence-worker:\n(.*?)(?=^  intelligence-beat:)", text, re.MULTILINE | re.DOTALL).group(1)
+    beat_block = re.search(r"^  intelligence-beat:\n(.*?)(?=^  ollama:)", text, re.MULTILINE | re.DOTALL).group(1)
+    assert "inspect ping --destination=celery@$$HOSTNAME" in worker_block
+    assert "grep -q pong" in worker_block
+    assert "localhost:8000" not in worker_block
+    assert "grep -aq celery /proc/1/cmdline" in beat_block
+    assert "grep -aq beat /proc/1/cmdline" in beat_block
+    assert "localhost:8000" not in beat_block

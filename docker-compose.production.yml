@@ -112,6 +112,15 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
+    # The backend image's HTTP health check is appropriate only for the API.
+    # A worker is ready only after it answers Celery control traffic as its own
+    # node, which also proves the broker/control-plane connection is live.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.intelligence_celery:celery_app inspect ping --destination=celery@$$HOSTNAME --timeout=3 2>/dev/null | grep -q pong"]
+      interval: 15s
+      timeout: 8s
+      retries: 4
+      start_period: 30s
     networks: [aegis_network]
 
   intelligence-beat:
@@ -124,6 +133,14 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       migrate: {condition: service_completed_successfully}
+    # Beat has no HTTP listener or Celery control endpoint.  Its readiness is
+    # therefore the live scheduler process itself, not the API image check.
+    healthcheck:
+      test: ["CMD-SHELL", "grep -aq celery /proc/1/cmdline && grep -aq beat /proc/1/cmdline"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
     networks: [aegis_network]
 
   # Runtime only: the model volume is never initialized or changed by Compose.
