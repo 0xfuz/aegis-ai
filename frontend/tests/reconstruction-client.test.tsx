@@ -71,7 +71,7 @@ describe("route-scoped reconstruction loader", () => {
     const client = await import("@/lib/reconstruction-client");
     vi.spyOn(client, "fetchInvestigationReconstruction").mockRejectedValueOnce(new ApiError("network", 500)).mockResolvedValueOnce(response);
     render(<Probe id="case-2" />);
-    expect(await screen.findByTestId("status")).toHaveTextContent("error");
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("error"));
     expect(screen.getByTestId("case")).toHaveTextContent("none");
     fireEvent.click(screen.getByRole("button", { name: "retry" }));
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("ready"));
