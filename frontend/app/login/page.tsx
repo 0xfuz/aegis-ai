@@ -12,6 +12,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // This flag is only useful to a local demo build.  It deliberately never
+  // carries a credential value: production builds have no demo credentials to
+  // render or recover from client assets.
+  const localDemoMode = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -77,9 +81,11 @@ export default function LoginPage() {
           </Button>
         </form>
 
-        <p className="mt-6 text-center text-xs text-text-muted">
-          Demo credentials: admin@aegis.demo / ChangeMe123!
-        </p>
+        {localDemoMode && (
+          <p className="mt-6 text-center text-xs text-text-muted">
+            Local demo mode is enabled. Use credentials supplied by your local demo setup.
+          </p>
+        )}
       </div>
     </div>
   );
