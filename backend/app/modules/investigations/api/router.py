@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,8 @@ from app.modules.investigations.api.schemas import (
     IOCVerdictRequest,
     IOCWatchRequest,
     NoteCreate,
+    NoteRead,
+    NotePage,
     AuditEventPage,
 )
 from app.modules.identity.infrastructure.models import User
@@ -23,6 +25,13 @@ from app.modules.investigations.domain.finding_service import FindingService
 from app.shared.database import get_db
 
 router = APIRouter(prefix="/investigations", tags=["Investigations"])
+
+
+def _active_principal_or_404(principal: Principal, db: Session) -> None:
+    user = db.get(User, principal.user_id)
+    if user is None or user.org_id != principal.org_id or not user.is_active:
+        from fastapi import HTTPException, status
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found.")
 
 class FindingIn(BaseModel):
     title: str = Field(min_length=1, max_length=255)
@@ -167,18 +176,34 @@ def update_status(
     return InvestigationDetail.model_validate(investigation)
 
 
-@router.post("/{investigation_id}/notes", response_model=InvestigationDetail)
+@router.post("/{investigation_id}/notes", response_model=NoteRead)
 def add_note(
     investigation_id: UUID,
     payload: NoteCreate,
     principal: Principal = Depends(require_permission("investigation:write")),
     db: Session = Depends(get_db),
-) -> InvestigationDetail:
-    investigation = InvestigationService(db).add_note(
+) -> NoteRead:
+    _active_principal_or_404(principal, db)
+    note = InvestigationService(db).add_note(
         principal.org_id, investigation_id, principal.user_id, payload.body
     )
     db.commit()
-    return InvestigationDetail.model_validate(investigation)
+    return NoteRead.model_validate(note)
+
+
+@router.get("/{investigation_id}/notes", response_model=NotePage)
+def list_notes(
+    investigation_id: UUID,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+) -> NotePage:
+    if set(request.query_params) - {"limit", "offset"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
+    _active_principal_or_404(principal, db)
+    return InvestigationService(db).list_notes(principal.org_id, investigation_id, limit, offset)
 
 
 @router.post("/actions/{action_id}/approve", response_model=InvestigationDetail)

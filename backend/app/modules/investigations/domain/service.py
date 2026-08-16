@@ -5,6 +5,7 @@ never the repository or DB session directly.
 from datetime import datetime, timezone
 from uuid import UUID
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.investigations.infrastructure.models import (
@@ -79,12 +80,25 @@ class InvestigationService:
         investigation.status = new_status_enum
         return self.repo.save(investigation)
 
-    def add_note(self, org_id: UUID, investigation_id: UUID, author_id: UUID, body: str) -> Investigation:
+    def add_note(self, org_id: UUID, investigation_id: UUID, author_id: UUID, body: str) -> Note:
         investigation = self.get_investigation(org_id, investigation_id)
         note = Note(investigation_id=investigation.id, author_id=author_id, body=body)
         self.repo.add_note(note)
         self.db.flush()
-        return self.get_investigation(org_id, investigation_id)
+        return note
+
+    def list_notes(self, org_id: UUID, investigation_id: UUID, limit: int, offset: int) -> dict:
+        self.get_investigation(org_id, investigation_id)
+        where = (Note.investigation_id == investigation_id,)
+        total = self.db.scalar(select(func.count()).select_from(Note).where(*where)) or 0
+        rows = self.db.scalars(
+            select(Note).where(*where).order_by(Note.created_at.desc(), Note.id.desc()).limit(limit).offset(offset)
+        )
+        return {
+            "items": [{"id": str(note.id), "author_id": str(note.author_id), "body": note.body[:4000],
+                       "created_at": note.created_at, "updated_at": note.updated_at} for note in rows],
+            "limit": limit, "offset": offset, "total": total,
+        }
 
     def decide_action(self, org_id: UUID, action_id: UUID, approve: bool) -> Investigation:
         action = self.repo.get_action(org_id, action_id)

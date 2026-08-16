@@ -43,12 +43,29 @@ class NoteRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     author_id: UUID
-    body: str
+    body: str = Field(max_length=4000)
     created_at: datetime
+    updated_at: datetime
 
 
 class NoteCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     body: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("body")
+    @classmethod
+    def non_blank_body(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Note body must not be blank.")
+        return value
+
+
+class NotePage(BaseModel):
+    items: list[NoteRead]
+    limit: int
+    offset: int
+    total: int
 
 
 class RecommendedActionRead(BaseModel):
