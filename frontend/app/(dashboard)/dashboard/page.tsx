@@ -22,6 +22,7 @@ interface InvestigationSummary {
   status: string;
   confidence: number;
 }
+interface InvestigationPage { items: InvestigationSummary[]; }
 
 export default function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -32,11 +33,11 @@ export default function DashboardPage() {
     setError(null);
     Promise.all([
       apiFetch<DashboardSummary>("/api/v1/investigations/dashboard-summary"),
-      apiFetch<InvestigationSummary[]>("/api/v1/investigations?limit=5"),
+      apiFetch<InvestigationPage>("/api/v1/investigations?limit=5"),
     ])
       .then(([summaryData, queueData]) => {
         setSummary(summaryData);
-        setQueue(queueData);
+        setQueue(queueData.items);
       })
       .catch(() => setError("unavailable"));
   }, []);

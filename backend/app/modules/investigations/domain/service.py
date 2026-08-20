@@ -2,7 +2,7 @@
 Application services for the investigations module. Routers call these —
 never the repository or DB session directly.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -18,6 +18,7 @@ from app.modules.investigations.infrastructure.models import (
 from app.modules.investigations.infrastructure.repository import InvestigationRepository, IOCRepository
 from app.modules.investigations.api.schemas import (
     DashboardSummary,
+    DashboardWindowRead,
     EvidenceRecordRead,
     IOCDetail,
     RelatedInvestigation,
@@ -26,6 +27,8 @@ from app.shared.exceptions import NotFoundError, ValidationError
 
 _VALID_IOC_TYPES = {"ip", "hash", "domain", "url", "asset"}
 _VALID_IOC_VERDICTS = {"malicious", "suspicious", "unknown", "benign"}
+_DASHBOARD_PRESETS = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
+_MAX_DASHBOARD_RANGE = timedelta(days=90)
 
 # Valid forward/backward moves on the Case Status Track. Kept explicit
 # rather than allowing any-to-any status changes, since the UX spec's
@@ -45,9 +48,11 @@ class InvestigationService:
         self.db = db
         self.repo = InvestigationRepository(db)
 
-    def list_investigations(self, org_id: UUID, status: str | None, limit: int, offset: int) -> list[Investigation]:
-        status_enum = self._parse_status(status) if status else None
-        return self.repo.list_by_org(org_id, status=status_enum, limit=limit, offset=offset)
+    def list_investigations(self, org_id: UUID, status: str | None, limit: int, offset: int) -> dict:
+        status_enum = self._parse_status(status) if status is not None else None
+        items = self.repo.list_by_org(org_id, status=status_enum, limit=limit, offset=offset)
+        return {"items": items, "limit": limit, "offset": offset, "returned_count": len(items),
+                "total": self.repo.count_by_org(org_id, status=status_enum)}
 
     def get_investigation(self, org_id: UUID, investigation_id: UUID) -> Investigation:
         investigation = self.repo.get_by_id(org_id, investigation_id)
@@ -114,12 +119,40 @@ class InvestigationService:
         self.db.flush()
         return self.get_investigation(org_id, action.investigation_id)
 
-    def dashboard_summary(self, org_id: UUID) -> DashboardSummary:
+    @staticmethod
+    def resolve_dashboard_window(
+        preset: str | None, from_at: datetime | None, to_at: datetime | None, now: datetime | None = None
+    ) -> DashboardWindowRead | None:
+        if preset and (from_at is not None or to_at is not None):
+            raise ValidationError("A preset cannot be combined with a custom range.")
+        if preset:
+            duration = _DASHBOARD_PRESETS.get(preset)
+            if duration is None:
+                raise ValidationError("Unsupported dashboard window preset.")
+            end = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            return DashboardWindowRead(preset=preset, from_at=end - duration, to_at=end)
+        if (from_at is None) != (to_at is None):
+            raise ValidationError("Both custom range boundaries are required.")
+        if from_at is None:
+            return None
+        if from_at.tzinfo is None or from_at.utcoffset() is None or to_at.tzinfo is None or to_at.utcoffset() is None:
+            raise ValidationError("Dashboard range timestamps must include a timezone.")
+        start, end = from_at.astimezone(timezone.utc), to_at.astimezone(timezone.utc)
+        if start > end:
+            raise ValidationError("Dashboard range start must not be later than its end.")
+        if end - start > _MAX_DASHBOARD_RANGE:
+            raise ValidationError("Dashboard range must not exceed 90 days.")
+        return DashboardWindowRead(from_at=start, to_at=end)
+
+    def dashboard_summary(self, org_id: UUID, window: DashboardWindowRead | None = None) -> DashboardSummary:
+        from_at = window.from_at if window else None
+        to_at = window.to_at if window else None
         return DashboardSummary(
-            open_investigations=self.repo.count_open(org_id),
-            critical_open=self.repo.count_critical_open(org_id),
-            avg_false_positive_probability=round(self.repo.avg_false_positive_probability(org_id), 1),
-            total_investigations=self.repo.count_by_org(org_id),
+            open_investigations=self.repo.count_open(org_id, from_at, to_at),
+            critical_open=self.repo.count_critical_open(org_id, from_at, to_at),
+            avg_false_positive_probability=round(self.repo.avg_false_positive_probability(org_id, from_at, to_at), 1),
+            total_investigations=self.repo.count_by_org(org_id, from_at=from_at, to_at=to_at),
+            window=window,
         )
 
     @staticmethod

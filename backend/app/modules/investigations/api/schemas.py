@@ -95,6 +95,16 @@ class InvestigationSummary(BaseModel):
     created_at: datetime
 
 
+class InvestigationPage(BaseModel):
+    """Bounded, server-ordered Case list for operational UI consumers."""
+
+    items: list[InvestigationSummary]
+    limit: int
+    offset: int
+    returned_count: int
+    total: int
+
+
 class InvestigationDetail(BaseModel):
     """Full shape for the Investigation Workspace."""
 
@@ -218,6 +228,15 @@ class DashboardSummary(BaseModel):
     critical_open: int
     avg_false_positive_probability: float
     total_investigations: int
+    window: "DashboardWindowRead | None" = None
+
+
+class DashboardWindowRead(BaseModel):
+    """UTC [from, to) scope used for every Dashboard aggregate."""
+
+    preset: str | None = None
+    from_at: datetime
+    to_at: datetime
 
 
 class AuditActorRead(BaseModel):

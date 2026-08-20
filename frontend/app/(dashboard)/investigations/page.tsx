@@ -18,6 +18,7 @@ interface InvestigationSummary {
   confidence: number;
   created_at: string;
 }
+interface InvestigationPage { items: InvestigationSummary[]; }
 interface DemoScenario { id: string; title: string; loaded: boolean; }
 
 export default function InvestigationsPage() {
@@ -30,8 +31,8 @@ export default function InvestigationsPage() {
 
   const load = useCallback(() => {
     setError(null);
-    Promise.all([apiFetch<InvestigationSummary[]>("/api/v1/investigations"), localDemoMode ? apiFetch<DemoScenario[]>("/api/v1/demos") : Promise.resolve([])])
-      .then(([rows, demoRows]) => { setInvestigations(rows); setDemos(demoRows); })
+    Promise.all([apiFetch<InvestigationPage>("/api/v1/investigations"), localDemoMode ? apiFetch<DemoScenario[]>("/api/v1/demos") : Promise.resolve([])])
+      .then(([rows, demoRows]) => { setInvestigations(rows.items); setDemos(demoRows); })
       .catch(() => setError("unavailable"));
   }, [localDemoMode]);
 

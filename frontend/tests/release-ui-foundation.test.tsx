@@ -30,7 +30,7 @@ describe("release UI foundation", () => {
 
   it("does not fetch or display demos in production mode", async () => {
     vi.stubEnv("NEXT_PUBLIC_DEMO_MODE", "false");
-    state.apiFetch.mockResolvedValue([]);
+    state.apiFetch.mockResolvedValue({ items: [] });
     render(<InvestigationsPage />);
     await screen.findByText("No investigations yet");
     expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations");
@@ -40,7 +40,7 @@ describe("release UI foundation", () => {
 
   it("keeps demo controls behind explicit local demo mode", async () => {
     vi.stubEnv("NEXT_PUBLIC_DEMO_MODE", "true");
-    state.apiFetch.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "demo-1", title: "Synthetic case", loaded: false }]);
+    state.apiFetch.mockResolvedValueOnce({ items: [] }).mockResolvedValueOnce([{ id: "demo-1", title: "Synthetic case", loaded: false }]);
     render(<InvestigationsPage />);
     expect(await screen.findByText(/Try Demo Investigation/)).toBeVisible();
     expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/demos");

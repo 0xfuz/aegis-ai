@@ -1,6 +1,7 @@
+from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status as http_status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -8,6 +9,7 @@ from app.modules.identity.api.dependencies import Principal, get_current_princip
 from app.modules.investigations.api.schemas import (
     DashboardSummary,
     InvestigationDetail,
+    InvestigationPage,
     InvestigationStatusUpdate,
     InvestigationSummary,
     IOCDetail,
@@ -30,8 +32,7 @@ router = APIRouter(prefix="/investigations", tags=["Investigations"])
 def _active_principal_or_404(principal: Principal, db: Session) -> None:
     user = db.get(User, principal.user_id)
     if user is None or user.org_id != principal.org_id or not user.is_active:
-        from fastapi import HTTPException, status
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found.")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Investigation not found.")
 
 class FindingIn(BaseModel):
     title: str = Field(min_length=1, max_length=255)
@@ -52,8 +53,7 @@ def audit(investigation_id: UUID, limit: int = Query(default=100, ge=1, le=200),
     if user is None or user.org_id != principal.org_id or not user.is_active:
         # Keep an inactive or stale principal indistinguishable from an
         # inaccessible Investigation at this read boundary.
-        from fastapi import HTTPException, status
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found.")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Investigation not found.")
     return FindingService(db).audit(principal.org_id, investigation_id, limit, offset)
 
 @router.get("/{investigation_id}/findings")
@@ -79,24 +79,39 @@ def review_mitre(mapping_id: UUID, body: MitreReviewIn, principal: Principal = D
     return FindingService(db).review_mapping(principal.org_id, mapping_id, principal.user_id, body.status, body.rationale)
 
 
-@router.get("", response_model=list[InvestigationSummary])
+@router.get("", response_model=InvestigationPage)
 def list_investigations(
+    request: Request,
     status: str | None = Query(default=None, description="Filter by status, e.g. 'new', 'investigating'"),
-    limit: int = Query(default=50, le=200),
+    limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     principal: Principal = Depends(require_permission("investigation:read")),
     db: Session = Depends(get_db),
-) -> list[InvestigationSummary]:
-    investigations = InvestigationService(db).list_investigations(principal.org_id, status, limit, offset)
-    return [InvestigationSummary.model_validate(i) for i in investigations]
+) -> InvestigationPage:
+    if set(request.query_params) - {"status", "limit", "offset"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
+    _active_principal_or_404(principal, db)
+    page = InvestigationService(db).list_investigations(principal.org_id, status, limit, offset)
+    return InvestigationPage(
+        items=[InvestigationSummary.model_validate(item) for item in page["items"]],
+        limit=page["limit"], offset=page["offset"], returned_count=page["returned_count"], total=page["total"],
+    )
 
 
 @router.get("/dashboard-summary", response_model=DashboardSummary)
 def dashboard_summary(
+    request: Request,
+    window: str | None = Query(default=None),
+    from_at: datetime | None = Query(default=None, alias="from"),
+    to_at: datetime | None = Query(default=None, alias="to"),
     principal: Principal = Depends(require_permission("investigation:read")),
     db: Session = Depends(get_db),
 ) -> DashboardSummary:
-    return InvestigationService(db).dashboard_summary(principal.org_id)
+    if set(request.query_params) - {"window", "from", "to"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
+    _active_principal_or_404(principal, db)
+    resolved_window = InvestigationService.resolve_dashboard_window(window, from_at, to_at)
+    return InvestigationService(db).dashboard_summary(principal.org_id, resolved_window)
 
 
 @router.get("/iocs", response_model=list[IOCSummary])
@@ -201,7 +216,7 @@ def list_notes(
     db: Session = Depends(get_db),
 ) -> NotePage:
     if set(request.query_params) - {"limit", "offset"}:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
     _active_principal_or_404(principal, db)
     return InvestigationService(db).list_notes(principal.org_id, investigation_id, limit, offset)
 
