@@ -10,6 +10,8 @@ const state = vi.hoisted(() => ({ apiFetch: vi.fn(), replace: vi.fn() }));
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "case-42" }),
   useRouter: () => ({ push: vi.fn(), replace: state.replace }),
+  usePathname: () => "/investigations",
+  useSearchParams: () => new URLSearchParams(),
 }));
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("@/lib/api-client", () => ({ apiFetch: state.apiFetch, ApiError: class ApiError extends Error {} }));
@@ -30,20 +32,20 @@ describe("release UI foundation", () => {
 
   it("does not fetch or display demos in production mode", async () => {
     vi.stubEnv("NEXT_PUBLIC_DEMO_MODE", "false");
-    state.apiFetch.mockResolvedValue({ items: [] });
+    state.apiFetch.mockResolvedValue({ items: [], limit: 25, offset: 0, returned_count: 0, total: 0 });
     render(<InvestigationsPage />);
-    await screen.findByText("No investigations yet");
-    expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations");
+    await screen.findByText("No Cases yet");
+    expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations?limit=25&offset=0", expect.anything());
     expect(state.apiFetch.mock.calls.some(([path]) => String(path).includes("/demos"))).toBe(false);
     expect(document.body.textContent).not.toContain("Demo Investigation");
   });
 
-  it("keeps demo controls behind explicit local demo mode", async () => {
+  it("does not expose demo controls through the production Cases UI", async () => {
     vi.stubEnv("NEXT_PUBLIC_DEMO_MODE", "true");
-    state.apiFetch.mockResolvedValueOnce({ items: [] }).mockResolvedValueOnce([{ id: "demo-1", title: "Synthetic case", loaded: false }]);
+    state.apiFetch.mockResolvedValue({ items: [], limit: 25, offset: 0, returned_count: 0, total: 0 });
     render(<InvestigationsPage />);
-    expect(await screen.findByText(/Try Demo Investigation/)).toBeVisible();
-    expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/demos");
+    await screen.findByText("No Cases yet");
+    expect(state.apiFetch.mock.calls.some(([path]) => String(path).includes("/demos"))).toBe(false);
   });
 
   it("redirects the compatibility Attack Graph URL to the sole relationships destination", async () => {
