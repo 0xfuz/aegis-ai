@@ -60,6 +60,56 @@ class InvestigationService:
             raise NotFoundError("Investigation not found.")
         return investigation
 
+    def overview(self, org_id: UUID, investigation_id: UUID) -> dict:
+        """Return one deterministic, aggregate-only workspace projection.
+
+        All counts are correlated scalar subqueries in a single statement.
+        This avoids the legacy detail page's linearly-growing client fan-out
+        and does not load any evidence content or mutable authority fields.
+        """
+        from app.modules.ai_reasoning.infrastructure.intelligence_models import IntelligenceAnalysis
+        from app.modules.evidence.infrastructure.models import (
+            Entity, EntityRelationship, Event, EvidenceItem, IndicatorOccurrence, RawRecord,
+        )
+        from app.modules.investigations.infrastructure.models import Finding, MitreMapping
+
+        def count_for(model, *conditions):
+            return select(func.count()).select_from(model).where(*conditions).scalar_subquery()
+
+        evidence_ids = select(EvidenceItem.id).where(
+            EvidenceItem.org_id == org_id, EvidenceItem.investigation_id == investigation_id
+        )
+        row = self.db.execute(
+            select(
+                Investigation,
+                count_for(EvidenceItem, EvidenceItem.org_id == org_id, EvidenceItem.investigation_id == investigation_id).label("evidence_items"),
+                count_for(RawRecord, RawRecord.org_id == org_id, RawRecord.evidence_id.in_(evidence_ids)).label("raw_records"),
+                count_for(Event, Event.org_id == org_id, Event.investigation_id == investigation_id).label("events"),
+                count_for(Entity, Entity.org_id == org_id, Entity.investigation_id == investigation_id).label("entities"),
+                count_for(IndicatorOccurrence, IndicatorOccurrence.org_id == org_id, IndicatorOccurrence.investigation_id == investigation_id).label("indicator_occurrences"),
+                count_for(EntityRelationship, EntityRelationship.org_id == org_id, EntityRelationship.investigation_id == investigation_id).label("relationships"),
+                count_for(Finding, Finding.org_id == org_id, Finding.investigation_id == investigation_id).label("findings"),
+                count_for(MitreMapping, MitreMapping.org_id == org_id, MitreMapping.investigation_id == investigation_id, MitreMapping.status == "CONFIRMED").label("confirmed_mitre_mappings"),
+                count_for(IntelligenceAnalysis, IntelligenceAnalysis.org_id == org_id, IntelligenceAnalysis.investigation_id == investigation_id).label("intelligence_runs"),
+            ).where(Investigation.id == investigation_id, Investigation.org_id == org_id)
+        ).one_or_none()
+        if row is None:
+            raise NotFoundError("Investigation not found.")
+        investigation = row[0]
+        return {
+            "investigation": {
+                "id": investigation.id, "title": investigation.title[:255], "source": investigation.source[:100],
+                "severity": investigation.severity.value, "status": investigation.status.value,
+                "created_at": investigation.created_at, "updated_at": investigation.updated_at,
+            },
+            "counts": {
+                "evidence_items": row.evidence_items, "raw_records": row.raw_records, "events": row.events,
+                "entities": row.entities, "indicator_occurrences": row.indicator_occurrences,
+                "relationships": row.relationships, "findings": row.findings,
+                "confirmed_mitre_mappings": row.confirmed_mitre_mappings, "intelligence_runs": row.intelligence_runs,
+            },
+        }
+
     def create_alert_promotion_investigation(self, org_id: UUID, title: str, severity: Severity) -> Investigation:
         """Create a normal investigation for an explicitly approved alert promotion."""
         investigation = Investigation(

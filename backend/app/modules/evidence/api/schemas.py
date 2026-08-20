@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EvidenceRead(BaseModel):
@@ -24,6 +24,39 @@ class EvidenceRead(BaseModel):
 
 class EvidenceDetail(EvidenceRead):
     pass
+
+
+class EvidenceImporterRead(BaseModel):
+    """Bounded display identity for an already-authorized evidence reader."""
+    id: UUID
+    display_name: str = Field(max_length=255)
+
+
+class EvidenceInventoryItem(BaseModel):
+    """Safe list projection.  It intentionally excludes source prose and raw data."""
+    id: UUID
+    filename: str = Field(max_length=1024)
+    detected_mime: str = Field(max_length=255)
+    byte_size: int
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    acquisition_source: str = Field(max_length=100)
+    imported_at: datetime
+    parsing_status: str = Field(max_length=20)
+    latest_parse_status: str | None = Field(default=None, max_length=20)
+    parser_name: str | None = Field(default=None, max_length=100)
+    parser_version: str | None = Field(default=None, max_length=100)
+    parse_warning_count: int
+    raw_record_count: int
+    raw_content_unavailable_count: int
+    event_count: int
+    importer: EvidenceImporterRead | None = None
+
+
+class EvidenceInventoryPage(BaseModel):
+    items: list[EvidenceInventoryItem]
+    limit: int
+    offset: int
+    total: int
 
 
 class RawRecordRead(BaseModel):

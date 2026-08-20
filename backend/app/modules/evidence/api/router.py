@@ -1,27 +1,35 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status as http_status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.modules.evidence.api.schemas import (
-    EntityRead, EntityRelationshipRead, EventRead, EvidenceDetail, EvidenceRead,
+    EntityRead, EntityRelationshipRead, EventRead, EvidenceDetail, EvidenceRead, EvidenceInventoryPage,
     IndicatorOccurrenceRead, IndicatorRead, EntityObservationRead, RawRecordRead,
 )
 from app.modules.evidence.domain.service import EvidenceIngestionService
+from app.modules.evidence.domain.read_projection import EvidenceInventoryService
 from app.modules.evidence.infrastructure.models import AuditEvent, EvidenceItem, EvidenceParseRun
 from app.modules.evidence.infrastructure.repository import EvidenceRepository
 from app.modules.evidence.infrastructure.storage import EvidenceStorage
 from app.modules.evidence.domain.graph_projection import CanonicalGraphProjectionService, GraphFilters
 from app.modules.evidence.api.graph_schemas import CanonicalGraphRead
 from app.modules.identity.api.dependencies import Principal, require_permission
+from app.modules.identity.infrastructure.models import User
 from app.shared.database import get_db
 from app.shared.exceptions import NotFoundError
 
 router = APIRouter(prefix="/investigations", tags=["Canonical Evidence"])
+
+
+def _active_principal_or_404(principal: Principal, db: Session) -> None:
+    user = db.get(User, principal.user_id)
+    if user is None or user.org_id != principal.org_id or not user.is_active:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Evidence not found.")
 
 
 def _evidence(db: Session, principal: Principal, investigation_id: UUID, evidence_id: UUID):
@@ -70,6 +78,23 @@ def list_evidence(
 ) -> list[EvidenceRead]:
     rows = db.execute(select(EvidenceItem).where(EvidenceItem.org_id == principal.org_id, EvidenceItem.investigation_id == investigation_id).order_by(EvidenceItem.imported_at.desc())).scalars()
     return [_serialize_evidence(db, row) for row in rows]
+
+
+@router.get("/{investigation_id}/evidence/inventory", response_model=EvidenceInventoryPage)
+def evidence_inventory(
+    investigation_id: UUID,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+) -> EvidenceInventoryPage:
+    if set(request.query_params) - {"limit", "offset"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
+    _active_principal_or_404(principal, db)
+    return EvidenceInventoryPage.model_validate(
+        EvidenceInventoryService(db).list(principal.org_id, investigation_id, limit, offset)
+    )
 
 
 @router.get("/{investigation_id}/evidence/{evidence_id}", response_model=EvidenceDetail)

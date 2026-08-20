@@ -9,6 +9,7 @@ from app.modules.identity.api.dependencies import Principal, get_current_princip
 from app.modules.investigations.api.schemas import (
     DashboardSummary,
     InvestigationDetail,
+    InvestigationOverview,
     InvestigationPage,
     InvestigationStatusUpdate,
     InvestigationSummary,
@@ -44,9 +45,10 @@ class FindingFromAIIn(BaseModel):
     severity: str = "medium"
 class FindingStatusIn(BaseModel): status: str
 class MitreReviewIn(BaseModel): status: str; rationale: str = ""
-@router.get("/{investigation_id}/overview")
-def overview(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)):
-    return FindingService(db).overview(principal.org_id, investigation_id)
+@router.get("/{investigation_id}/overview", response_model=InvestigationOverview)
+def overview(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> InvestigationOverview:
+    _active_principal_or_404(principal, db)
+    return InvestigationOverview.model_validate(InvestigationService(db).overview(principal.org_id, investigation_id))
 @router.get("/{investigation_id}/audit", response_model=AuditEventPage)
 def audit(investigation_id: UUID, limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0), principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)):
     user = db.get(User, principal.user_id)

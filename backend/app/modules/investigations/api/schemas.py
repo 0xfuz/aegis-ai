@@ -105,6 +105,40 @@ class InvestigationPage(BaseModel):
     total: int
 
 
+class InvestigationOverviewIdentity(BaseModel):
+    id: UUID
+    title: str = Field(max_length=255)
+    source: str = Field(max_length=100)
+    severity: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class InvestigationOverviewCounts(BaseModel):
+    evidence_items: int
+    raw_records: int
+    events: int
+    entities: int
+    indicator_occurrences: int
+    relationships: int
+    findings: int
+    confirmed_mitre_mappings: int
+    intelligence_runs: int
+
+
+class InvestigationOverview(BaseModel):
+    """Bounded factual summary for one Investigation workspace.
+
+    This deliberately contains aggregate counts only.  Raw evidence, legacy
+    AI fields, audit metadata, and prompt/provider material remain behind
+    their own bounded, authorized read contracts.
+    """
+
+    investigation: InvestigationOverviewIdentity
+    counts: InvestigationOverviewCounts
+
+
 class InvestigationDetail(BaseModel):
     """Full shape for the Investigation Workspace."""
 
