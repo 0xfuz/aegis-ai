@@ -18,6 +18,9 @@ FROM node:20.18.1-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+# The Next standalone server otherwise defaults to the container hostname,
+# which leaves the in-container loopback health probe unable to reach it.
+ENV HOSTNAME=0.0.0.0
 
 USER node
 

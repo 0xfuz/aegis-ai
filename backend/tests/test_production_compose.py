@@ -65,6 +65,7 @@ def test_production_frontend_healthcheck_targets_only_the_bounded_runtime_probe(
     assert "redis:" not in frontend_block and "ollama:" not in frontend_block
     assert "http://localhost:3000/healthz" in dockerfile
     assert "statusCode === 200" in dockerfile
+    assert "ENV HOSTNAME=0.0.0.0" in dockerfile
 
 
 def test_production_compose_pins_ollama_and_fixed_trusted_model_without_legacy_secrets():
