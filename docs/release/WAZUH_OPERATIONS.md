@@ -85,6 +85,37 @@ agentless/syslog line containing that literal. Verify, in order:
 The demonstration must create no automatic Finding, confirmed MITRE mapping,
 action, provider run, or claim.
 
+## TLS certificate expiry and rotation
+
+Before starting a Manager integration, inspect the proxy certificate subject,
+issuer, SANs, validity window, and fingerprint. The configured forwarder
+hostname must appear as an exact SAN; do not use wildcard certificates. Keep
+the proxy private key `0600` and the containing rotation directory `0700`.
+
+Back up the current certificate and key to a protected operator-only location
+before replacement. Rotate the trust anchor and server certificate together
+when the existing CA is expired or otherwise unsuitable. Validate the new
+chain from the forwarder network context with normal CA and hostname
+verification: the configured hostname must succeed, while an unrelated CA and
+wrong hostname must fail. Do not disable TLS verification, use plaintext HTTP,
+or add a bypass endpoint.
+
+Restart the proxy first, then the Manager integration. Allow any existing
+durable pending record to receive its normal retry opportunity and inspect the
+acknowledgement, pending, and quarantine counters. Do not rewrite the record
+or manually POST its payload. Keep expired material only as protected
+diagnostic evidence for the defined retention period.
+
+When a Manager restart follows a retained pending startup alert, two Rule 502
+records can be legitimate: one is the acknowledged alert from the earlier
+Manager process start, and one is the alert from the current process start.
+Each must have a distinct authoritative Wazuh alert identity and exactly one
+RawEvent, CanonicalAlert, correlation-v2 membership, and triage assessment.
+A loop is instead an additional Rule 502 without another Manager start,
+repeated delivery of one source identity, duplicate membership, or unexpected
+spool growth. Establish a baseline after the expected current-start append and
+observe it before treating the path as stable.
+
 ## Vulnerability Detection operational boundary
 
 Wazuh Vulnerability Detection is not required for the durable `custom-aegis`

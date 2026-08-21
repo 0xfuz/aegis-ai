@@ -16,6 +16,12 @@ def test_wazuh_operations_uses_verified_manager_conventions_and_secret_file_only
     assert "100500" in rule and "AEGIS_R3_AGENTLESS_DEMO_LITERAL" in rule
     assert "decoded_as" not in rule
     assert "Vulnerability Detection" in guide and "vd_updater" in guide
+    assert "TLS certificate expiry and rotation" in guide
+    assert "CA and hostname" in guide and "verification:" in guide
+    assert "Do not disable TLS verification" in guide
+    assert "two Rule 502" in guide
+    assert "distinct authoritative Wazuh alert identity" in guide
+    assert "additional Rule 502 without another Manager start" in guide
 
 
 def test_release_scripts_are_strict_and_restore_is_explicitly_isolated():
