@@ -28,7 +28,7 @@ vi.mock("@/lib/reconstruction-client", () => ({ isInvestigationRouteId: (value: 
 vi.mock("@/lib/auth-context", () => ({ useAuth: () => ({ user: { is_active: true }, hasPermission: () => true }) }));
 
 const findings = { items: ["OPEN", "CONFIRMED", "DISMISSED", "RESOLVED"].map((status, index) => ({ id: String(index), title: status, description: "finding detail", severity: "high", confidence: 80, status, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", provenance: { available: true, omitted: 0 }, fact_links: [{ fact_id: "fact-1", fact_type: "EVENT", role: "SUPPORTS" }] })), limit: 25, offset: 0, returned_count: 4, total: 4 };
-const mappings = ["PROPOSED", "CONFIRMED", "REJECTED"].map((status, index) => ({ id: String(index), technique_id: `T10${index}`, technique_name: "Technique", tactic: "execution", confidence: 70, ai_rationale: "mapping rationale", status, source_intelligence_item_id: index === 0 ? "ai-1" : null, finding_id: index === 1 ? "finding-1" : null, fact_links: [{ fact_id: "event-1", role: "SUPPORTS" }] }));
+const mappings = { items: ["PROPOSED", "CONFIRMED", "REJECTED"].map((status, index) => ({ id: String(index), technique_id: `T10${index}`, technique_name: "Technique", tactic: "execution", confidence: 70, review_rationale: null, status, created_at: "2026-01-01T00:00:00Z", reviewed_at: null, provenance: { available: true, omitted: 0 }, fact_links: [{ fact_id: "event-1", fact_type: "EVENT", role: "CONTEXT" }] })), limit: 25, offset: 0, returned_count: 3, total: 3 };
 
 describe("A6 workspaces", () => {
   beforeEach(() => { state.apiFetch.mockReset(); reconstruction.fetch.mockReset(); reconstruction.fetch.mockResolvedValue(reconstructionResponse); });
@@ -74,37 +74,34 @@ describe("A6 workspaces", () => {
     expect(state.apiFetch.mock.calls.some(([path]) => String(path).includes("/finding"))).toBe(false);
   });
 
-  it("renders MITRE states with sources and FACT provenance", async () => {
+  it("renders bounded analyst-controlled MITRE mappings without legacy sources", async () => {
     state.apiFetch.mockResolvedValue(mappings);
     render(<MitrePage />);
-    for (const heading of ["Proposed", "Confirmed", "Rejected"]) expect(await screen.findByText(heading)).toBeInTheDocument();
-    expect(screen.getByText("Source: AI inference ai-1")).toBeInTheDocument();
-    expect(screen.getByText("Source: Finding finding-1")).toBeInTheDocument();
-    expect(screen.getAllByText(/Supporting FACTs: event-1/)).toHaveLength(3);
+    for (const technique of ["T100", "T101", "T102"]) expect((await screen.findAllByText(technique)).length).toBeGreaterThan(0);
+    expect(screen.getByText("Analyst-controlled mapping authority")).toBeInTheDocument();
+    expect(screen.queryByText(/Source: AI inference|Source: Finding/)).toBeNull();
+    expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations/case-1/mitre?limit=25&offset=0", expect.any(Object));
   });
 
   it("confirms and rejects proposed MITRE mappings with rationale", async () => {
-    vi.spyOn(window, "prompt").mockReturnValue("not applicable");
-    state.apiFetch.mockResolvedValue(mappings);
+    state.apiFetch.mockResolvedValueOnce(mappings).mockResolvedValueOnce({}).mockResolvedValueOnce(mappings);
     render(<MitrePage />);
-    await screen.findByText("Proposed");
-    fireEvent.click(screen.getByText("Confirm"));
-    await waitFor(() => expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations/mitre-mappings/0/review", expect.objectContaining({ method: "POST", body: JSON.stringify({ status: "CONFIRMED", rationale: "Confirmed by analyst" }) })));
-    fireEvent.click(screen.getByText("Reject"));
-    await waitFor(() => expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations/mitre-mappings/0/review", expect.objectContaining({ method: "POST", body: JSON.stringify({ status: "REJECTED", rationale: "not applicable" }) })));
+    fireEvent.click((await screen.findAllByRole("button", { name: "Confirm" }))[0]!);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm mapping" }));
+    await waitFor(() => expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations/mitre-mappings/0/review", expect.objectContaining({ method: "POST", body: JSON.stringify({ status: "CONFIRMED", rationale: "" }) })));
   });
 
   it("handles MITRE loading, empty, and API-error states", async () => {
     let resolve!: (value: typeof mappings) => void;
     state.apiFetch.mockReturnValueOnce(new Promise<typeof mappings>(done => { resolve = done; }));
     const { unmount } = render(<MitrePage />);
-    expect(screen.getByText("Loading MITRE review…")).toBeInTheDocument();
-    resolve([]);
-    expect(await screen.findByText("No proposed mappings.")).toBeInTheDocument();
+    expect(screen.getByText("Loading MITRE mappings")).toBeInTheDocument();
+    resolve({ ...mappings, items: [], returned_count: 0, total: 0 });
+    expect(await screen.findByText("No MITRE mappings")).toBeInTheDocument();
     unmount();
     state.apiFetch.mockRejectedValueOnce(new ApiError("MITRE unavailable", 500));
     render(<MitrePage />);
-    expect(await screen.findByText("MITRE unavailable")).toBeInTheDocument();
+    expect(await screen.findByText("Unable to load MITRE mappings")).toBeInTheDocument();
   });
 
   it("renders one bounded authoritative overview projection", async () => {
