@@ -84,3 +84,19 @@ agentless/syslog line containing that literal. Verify, in order:
 
 The demonstration must create no automatic Finding, confirmed MITRE mapping,
 action, provider run, or claim.
+
+## Vulnerability Detection operational boundary
+
+Wazuh Vulnerability Detection is not required for the durable `custom-aegis`
+integration path. Monitor Manager disk capacity and
+`/var/ossec/queue/vd_updater/tmp` during operation: the `vd_updater` temporary
+workspace can grow independently of alert forwarding. Never delete the
+Vulnerability Detection feed, alerts, integrations, rules, TLS material, or
+forwarder spool as a space-recovery shortcut.
+
+For a disposable capacity-constrained lab, disable Vulnerability Detection only
+through the Manager's locally verified configuration workflow, after backing
+up its configuration and validating it before restart. Recheck analysisd,
+integratord, the custom integration, TLS configuration, and spool ownership
+afterward. Production enablement or disablement is an operator capacity
+decision and must be monitored; it does not change Aegis ingestion semantics.

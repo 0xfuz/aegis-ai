@@ -15,6 +15,7 @@ def test_wazuh_operations_uses_verified_manager_conventions_and_secret_file_only
     assert 'for candidate in "$@"' in wrapper and 'exec /usr/bin/python3 "$FORWARDER" "$ALERT_FILE"' in wrapper
     assert "100500" in rule and "AEGIS_R3_AGENTLESS_DEMO_LITERAL" in rule
     assert "decoded_as" not in rule
+    assert "Vulnerability Detection" in guide and "vd_updater" in guide
 
 
 def test_release_scripts_are_strict_and_restore_is_explicitly_isolated():
