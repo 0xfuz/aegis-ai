@@ -129,25 +129,17 @@ describe("A6 workspaces", () => {
     expect(await screen.findByText("MITRE unavailable")).toBeInTheDocument();
   });
 
-  it("renders exact canonical overview metrics and latest AIIE status", async () => {
-    state.apiFetch.mockImplementation((path: string) => {
-      if (path.endsWith("/evidence")) return Promise.resolve([{ id: "e1" }, { id: "e2" }]);
-      if (path.includes("raw-records")) return Promise.resolve(path.includes("e1") ? [{ id: "r1" }, { id: "r2" }] : [{ id: "r3" }]);
-      if (path.endsWith("/events")) return Promise.resolve([{ id: "ev1" }, { id: "ev2" }, { id: "ev3" }]);
-      if (path.endsWith("/indicators")) return Promise.resolve([{ id: "i1" }]);
-      if (path.endsWith("/entities")) return Promise.resolve([{ id: "n1" }, { id: "n2" }]);
-      if (path.endsWith("/relationships")) return Promise.resolve([{ id: "rel1" }]);
-      if (path.endsWith("/findings")) return Promise.resolve([{ id: "f1" }]);
-      if (path.endsWith("/mitre-mappings")) return Promise.resolve([{ status: "CONFIRMED" }, { status: "PROPOSED" }]);
-      return Promise.resolve({ status: "COMPLETED" });
-    });
+  it("renders one bounded authoritative overview projection", async () => {
+    state.apiFetch.mockResolvedValue({ investigation: { id: "case-1", title: "Case one", source: "test", severity: "high", status: "investigating", created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-02T00:00:00Z" }, counts: { evidence_items: 2, raw_records: 3, events: 3, indicator_occurrences: 1, entities: 2, relationships: 1, findings: 1, confirmed_mitre_mappings: 1, intelligence_runs: 1 } });
     render(<OverviewWorkspace id="case-1" />);
-    await screen.findByText("Canonical factual metrics");
-    const metrics: Array<[string, string]> = [["Evidence", "2"], ["Raw records", "3"], ["Events", "3"], ["Indicators", "1"], ["Entities", "2"], ["Relationships", "1"], ["Findings", "1"], ["Confirmed MITRE", "1"], ["Latest AIIE", "COMPLETED"]];
+    await screen.findByText("Persisted record counts");
+    const metrics: Array<[string, string]> = [["Evidence", "2"], ["Raw records", "3"], ["Events / Timeline", "3"], ["Indicators", "1"], ["Entities", "2"], ["Relationships / Attack Graph", "1"], ["Findings", "1"], ["Confirmed MITRE", "1"], ["Intelligence runs", "1"]];
     for (const [label, value] of metrics) {
       const metric = screen.getAllByText(label).find(element => element.tagName === "DIV");
       expect(metric).toBeDefined();
       expect(within(metric!.parentElement!).getByText(value)).toBeInTheDocument();
     }
+    expect(state.apiFetch).toHaveBeenCalledTimes(1);
+    expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations/case-1/overview", expect.any(Object));
   });
 });

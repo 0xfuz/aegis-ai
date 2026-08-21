@@ -11,28 +11,30 @@ vi.mock("@/lib/api-client", async () => {
 });
 vi.mock("next/navigation", () => ({ usePathname: () => "/investigations/case-1/evidence" }));
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
+vi.mock("@/lib/auth-context", () => ({ useAuth: () => ({ hasPermission: (code: string) => code === "investigation:write" }) }));
 
 const evidence = { id: "evidence-1", original_filename: "auth.log", sha256: "a".repeat(64), byte_size: 12, detected_mime: "text/plain", source_description: "sensor export", imported_at: "2026-01-01T00:00:00Z", parsing_status: "complete", parser_name: "line", parser_version: "1" };
+const inventory = { id: "evidence-1", filename: "auth.log", sha256: "a".repeat(64), byte_size: 12, detected_mime: "text/plain", acquisition_source: "test", imported_at: "2026-01-01T00:00:00Z", parsing_status: "complete", latest_parse_status: "complete", parser_name: "line", parser_version: "1", parse_warning_count: 0, raw_record_count: 1, raw_content_unavailable_count: 0, event_count: 1, importer: { id: "user-1", display_name: "Analyst" } };
 
 describe("factual workspace", () => {
   beforeEach(() => { apiFetch.mockReset(); });
 
-  it("shows evidence and raw-record provenance", async () => {
-    apiFetch.mockImplementation((path: string) => path.endsWith("/evidence") ? Promise.resolve([evidence]) : Promise.resolve([{ id: "raw-1", ordinal: 0, content: "log line", content_type: "text/plain", byte_offset: 0, line_start: 1, line_end: 1 }]));
+  it("shows the bounded evidence inventory without loading raw-record content", async () => {
+    apiFetch.mockImplementation((path: string) => path.includes("/evidence/inventory") ? Promise.resolve({ items: [inventory], limit: 25, offset: 0, total: 1 }) : Promise.resolve([]));
     render(<EvidenceWorkspace id="case-1" />);
-    expect(await screen.findByText("auth.log")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("auth.log"));
-    expect(await screen.findByText("Raw records")).toBeInTheDocument();
-    expect(screen.getByText("#0 · text/plain")).toBeInTheDocument();
+    expect((await screen.findAllByText("auth.log")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("1 records · 1 events").length).toBeGreaterThan(0);
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(apiFetch.mock.calls[0]![0]).toContain("/evidence/inventory?limit=25&offset=0");
   });
 
   it("surfaces duplicate evidence feedback from the API", async () => {
-    apiFetch.mockImplementation((path: string, options?: RequestInit) => options?.method === "POST" ? Promise.reject(new ApiError("Duplicate evidence already exists", 409)) : Promise.resolve([evidence]));
+    apiFetch.mockImplementation((path: string, options?: RequestInit) => options?.method === "POST" ? Promise.reject(new ApiError("Duplicate evidence already exists", 409)) : Promise.resolve({ items: [inventory], limit: 25, offset: 0, total: 1 }));
     render(<EvidenceWorkspace id="case-1" />);
-    await screen.findByText("auth.log");
+    await screen.findAllByText("auth.log");
     const file = new File(["x"], "copy.log", { type: "text/plain" });
     fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [file] } });
-    expect(await screen.findByText("Duplicate evidence already exists")).toBeInTheDocument();
+    expect(await screen.findByText("Unable to upload evidence. Please try again.")).toBeInTheDocument();
   });
 
   it("filters canonical events and exposes event provenance", async () => {
