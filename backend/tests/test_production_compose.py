@@ -10,6 +10,7 @@ from app.core.config import Settings
 
 ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_COMPOSE = ROOT / "docker-compose.production.yml"
+FRONTEND_DOCKERFILE = ROOT / "frontend" / "Dockerfile"
 
 
 def _production_settings(tmp_path: Path, **overrides) -> Settings:
@@ -54,6 +55,18 @@ def test_production_compose_has_one_migration_writer_and_private_internal_servic
     assert "aegis_postgres_data" in text and "aegis_evidence_data" in text and "aegis_ollama_data" in text
 
 
+def test_production_frontend_healthcheck_targets_only_the_bounded_runtime_probe():
+    text = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    frontend_block = re.search(r"^  frontend:\n(.*?)(?=^  intelligence-worker:)", text, re.MULTILINE | re.DOTALL).group(1)
+    dockerfile = FRONTEND_DOCKERFILE.read_text(encoding="utf-8")
+    assert "http://localhost:3000/healthz" in frontend_block
+    assert "statusCode === 200" in frontend_block
+    assert "http://localhost:3000'," not in frontend_block
+    assert "redis:" not in frontend_block and "ollama:" not in frontend_block
+    assert "http://localhost:3000/healthz" in dockerfile
+    assert "statusCode === 200" in dockerfile
+
+
 def test_production_compose_pins_ollama_and_fixed_trusted_model_without_legacy_secrets():
     text = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
     assert "ollama/ollama@sha256:4dea9fb511947e24a84237bb636b0203abcb2ff0d3fbc7b4ff865deb91362131" in text
@@ -87,3 +100,11 @@ def test_production_worker_and_beat_healthchecks_are_process_aware_not_http():
     assert "grep -aq celery /proc/1/cmdline" in beat_block
     assert "grep -aq beat /proc/1/cmdline" in beat_block
     assert "localhost:8000" not in beat_block
+
+
+def test_production_default_execution_gates_remain_disabled_and_ollama_is_optional():
+    text = PRODUCTION_COMPOSE.read_text(encoding="utf-8")
+    for name in ("INTELLIGENCE_EXECUTION_ENABLED", "INTELLIGENCE_DISPATCH_ENABLED", "INTELLIGENCE_PROVIDER_ENABLED"):
+        assert f"{name}: ${{{name}:-false}}" in text
+    ollama_block = re.search(r"^  ollama:\n(.*?)(?=^  admin-bootstrap:)", text, re.MULTILINE | re.DOTALL).group(1)
+    assert 'profiles: ["ollama"]' in ollama_block

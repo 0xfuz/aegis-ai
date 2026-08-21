@@ -100,6 +100,11 @@ services:
     depends_on:
       api: {condition: service_healthy}
     ports: ["127.0.0.1:${FRONTEND_PORT:-3000}:3000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     networks: [aegis_network]
 
   intelligence-worker:

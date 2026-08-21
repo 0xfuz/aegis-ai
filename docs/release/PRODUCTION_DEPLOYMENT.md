@@ -44,6 +44,33 @@ non-authoritative broker/cache: it may be rebuilt; queued runs are reconciled
 from PostgreSQL. The optional Ollama runtime retains a separate named model
 volume and never downloads or changes a model during startup.
 
+## Health and optional subsystem semantics
+
+The frontend exposes unauthenticated `GET /healthz` solely to prove that its
+deployed Next runtime is reachable. It returns the bounded response
+`{"status":"ok","service":"frontend"}` and does not probe the API, database,
+Redis, workers, Ollama, or any user-scoped records. The API liveness endpoint
+is likewise independent of Redis, workers, Ollama, Wazuh, and provider
+readiness. A healthy API or frontend therefore does not claim that optional
+Intelligence execution is available.
+
+Interpret optional Intelligence states separately:
+
+- **Execution disabled**: runs remain persisted but workers must not execute
+  them.
+- **Dispatch disabled**: no new broker delivery is requested; PostgreSQL stays
+  authoritative for queued work.
+- **Provider disabled**: execution cannot call a provider.
+- **Ollama absent or provider unavailable**: the optional provider path is
+  unavailable; this is not an API/frontend deployment failure.
+- **Infrastructure unavailable**: Redis/worker unavailability affects
+  dispatch/execution, not ordinary API liveness.
+
+The worker health check uses a Celery control ping scoped to the
+`intelligence-execution` worker; beat health checks its scheduler process.
+Neither is an HTTP-port probe. Production Compose uses `/healthz` for the
+frontend container health check.
+
 ## Intelligence and bootstrap
 
 Intelligence execution, dispatch, and provider access are all disabled by
