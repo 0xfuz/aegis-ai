@@ -90,6 +90,37 @@ class EventRead(BaseModel):
     normalized: dict
 
 
+class TimelineEvidenceRead(BaseModel):
+    id: UUID
+    filename: str = Field(max_length=1024)
+
+
+class TimelineEventRead(BaseModel):
+    """Bounded canonical Event projection; normalized JSON is never returned."""
+    id: UUID
+    timestamp: datetime | None
+    time_basis: str = Field(max_length=32)
+    event_type: str | None = Field(default=None, max_length=100)
+    source: str | None = Field(default=None, max_length=255)
+    host: str | None = Field(default=None, max_length=255)
+    user: str | None = Field(default=None, max_length=255)
+    source_ip: str | None = Field(default=None, max_length=64)
+    destination_ip: str | None = Field(default=None, max_length=64)
+    deterministic_severity: str | None = Field(default=None, max_length=20)
+    evidence: TimelineEvidenceRead
+    raw_content_available: bool
+    raw_locator_available: bool
+    provenance_status: str = Field(max_length=64)
+
+
+class TimelinePage(BaseModel):
+    items: list[TimelineEventRead]
+    limit: int
+    offset: int
+    returned_count: int
+    total: int
+
+
 class IndicatorRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status as http_status
@@ -8,11 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.modules.evidence.api.schemas import (
-    EntityRead, EntityRelationshipRead, EventRead, EvidenceDetail, EvidenceRead, EvidenceInventoryPage,
+    EntityRead, EntityRelationshipRead, EventRead, EvidenceDetail, EvidenceRead, EvidenceInventoryPage, TimelinePage,
     IndicatorOccurrenceRead, IndicatorRead, EntityObservationRead, RawRecordRead,
 )
 from app.modules.evidence.domain.service import EvidenceIngestionService
 from app.modules.evidence.domain.read_projection import EvidenceInventoryService
+from app.modules.evidence.domain.timeline_projection import TimelineProjectionService
 from app.modules.evidence.infrastructure.models import AuditEvent, EvidenceItem, EvidenceParseRun
 from app.modules.evidence.infrastructure.repository import EvidenceRepository
 from app.modules.evidence.infrastructure.storage import EvidenceStorage
@@ -24,6 +26,10 @@ from app.shared.database import get_db
 from app.shared.exceptions import NotFoundError
 
 router = APIRouter(prefix="/investigations", tags=["Canonical Evidence"])
+
+_TIMELINE_ISO_8601 = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 
 def _active_principal_or_404(principal: Principal, db: Session) -> None:
@@ -129,6 +135,31 @@ def list_raw_records(investigation_id: UUID, evidence_id: UUID, principal: Princ
 @router.get("/{investigation_id}/events", response_model=list[EventRead])
 def list_events(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[EventRead]:
     return [EventRead.model_validate(row) for row in EvidenceRepository(db).events(principal.org_id, investigation_id)]
+
+
+@router.get("/{investigation_id}/timeline", response_model=TimelinePage)
+def timeline(
+    investigation_id: UUID,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    from_at: datetime | None = Query(default=None, alias="from"),
+    to_at: datetime | None = Query(default=None, alias="to"),
+    evidence_id: UUID | None = Query(default=None),
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+) -> TimelinePage:
+    if set(request.query_params) - {"limit", "offset", "from", "to", "evidence_id"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
+    for name in ("from", "to"):
+        values = request.query_params.getlist(name)
+        if len(values) > 1 or (values and not _TIMELINE_ISO_8601.fullmatch(values[0])):
+            raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Timeline ranges must use timezone-aware ISO-8601 timestamps.")
+    _active_principal_or_404(principal, db)
+    return TimelinePage.model_validate(TimelineProjectionService(db).list(
+        principal.org_id, investigation_id, limit=limit, offset=offset,
+        from_at=from_at, to_at=to_at, evidence_id=evidence_id,
+    ))
 
 
 @router.get("/{investigation_id}/indicators", response_model=list[IndicatorRead])
