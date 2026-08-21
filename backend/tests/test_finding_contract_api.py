@@ -88,11 +88,14 @@ def test_list_is_scoped_paginated_deterministic_and_safe(db):
 
 def test_list_and_review_enforce_active_principal_and_permissions(db):
     org, user, inv = scope(db)
+    other_org, other_user, other_inv = scope(db, "foreign")
     finding = add_finding(db, org, inv, user, "reviewable", datetime.now(timezone.utc)); db.commit()
+    foreign = add_finding(db, other_org, other_inv, other_user, "foreign", datetime.now(timezone.utc)); db.commit()
     client = TestClient(app)
     assert client.get(list_path(inv), headers=headers(user, org, [])).status_code == 403
     assert client.post(status_path(finding), json={"status": "CONFIRMED"}, headers=headers(user, org, ["investigation:read"])).status_code == 403
     assert client.post(status_path(finding), json={"status": "CONFIRMED"}, headers=headers(user, org, ["investigation:write"])).status_code == 200
+    assert client.post(status_path(foreign), json={"status": "CONFIRMED"}, headers=headers(user, org, ["investigation:write"])).status_code == 404
     user.is_active = False; db.commit()
     assert client.get(list_path(inv), headers=headers(user, org, ["investigation:read"])).status_code == 404
     assert client.post(status_path(finding), json={"status": "RESOLVED"}, headers=headers(user, org, ["investigation:write"])).status_code == 404
@@ -111,8 +114,16 @@ def test_review_transitions_are_strict_atomic_and_audited_once(db, monkeypatch):
     ):
         assert client.post(status_path(finding), json=body, headers=write).status_code == 422
     assert client.post(status_path(finding), json={"status": "INVALID"}, headers=write).status_code == 422
+    prohibited = (IntelligenceAnalysis, IntelligenceItem, IntelligenceEvidenceReference, IntelligenceClaimEvidenceLink, MitreMapping, RecommendedAction)
+    scope_filter = lambda model: model.investigation_id == inv.id if model is RecommendedAction else model.org_id == org.id
+    before = {model.__name__: db.scalar(select(func.count()).select_from(model).where(scope_filter(model))) or 0 for model in prohibited}
+    original_title, original_description = finding.title, finding.description
     changed = client.post(status_path(finding), json={"status": "CONFIRMED"}, headers=write)
     assert changed.status_code == 200 and changed.json()["status"] == "CONFIRMED"
+    db.refresh(finding)
+    assert (finding.title, finding.description) == (original_title, original_description)
+    after = {model.__name__: db.scalar(select(func.count()).select_from(model).where(scope_filter(model))) or 0 for model in prohibited}
+    assert after == before
     assert client.post(status_path(finding), json={"status": "CONFIRMED"}, headers=write).status_code == 422
     assert client.post(status_path(finding), json={"status": "RESOLVED"}, headers=write).status_code == 200
     assert db.scalar(select(func.count()).select_from(AuditEvent).where(AuditEvent.target_id == finding.id, AuditEvent.action == "FINDING_STATUS_CHANGED")) == 2
