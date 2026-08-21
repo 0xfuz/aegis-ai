@@ -4,10 +4,12 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event as sqlalchemy_event
 
 from app.core.security import create_access_token
 from app.main import app
-from app.modules.evidence.infrastructure.models import Entity, EntityObservation, Event, EvidenceItem, EvidenceParseRun, Indicator, IndicatorOccurrence, RawRecord
+from app.modules.evidence.domain.graph_projection import CanonicalGraphProjectionService, GraphFilters
+from app.modules.evidence.infrastructure.models import Entity, EntityObservation, EntityRelationship, Event, EvidenceItem, EvidenceParseRun, Indicator, IndicatorOccurrence, RawRecord
 from app.modules.identity.infrastructure.models import Organization, Role, User
 from app.modules.investigations.infrastructure.models import Investigation, InvestigationStatus, Severity
 from app.shared.database import SessionLocal
@@ -21,7 +23,7 @@ def db():
 
 
 def seed(db, name="scope"):
-    token = uuid4().hex; org = Organization(name=f"{name}-{token}", slug=f"{name}-{token}"); role = Role(name=f"{name}-role-{token}")
+    token = uuid4().hex; prefix = name[:10]; org = Organization(name=f"{prefix}-{token}", slug=f"{prefix}-{token}"); role = Role(name=f"{prefix}-role-{token}")
     db.add_all((org, role)); db.flush(); user = User(org_id=org.id, role_id=role.id, email=f"{token}@test.invalid", hashed_password="x", full_name="Reader")
     investigation = Investigation(org_id=org.id, title="Case", source="test", severity=Severity.MEDIUM, status=InvestigationStatus.NEW); db.add_all((user, investigation)); db.commit(); return org, user, investigation
 
@@ -61,3 +63,77 @@ def test_indicators_are_occurrence_backed_and_scope_authorized(db):
     foreign_org, foreign_user, foreign_investigation = seed(db, "foreign"); assert client.get(f"/api/v1/investigations/{foreign_investigation.id}/indicators", headers=header(user, org)).status_code == 404
     assert client.get(f"{path}?org_id={foreign_org.id}", headers=header(user, org)).status_code == 422
     assert client.get(path, headers=header(user, org, ())).status_code == 403
+
+
+def test_canonical_graph_is_bounded_scoped_and_safe(db):
+    org, user, investigation = seed(db)
+    first, first_observation, local_indicator, _local = occurrence(db, org, investigation, user, suffix="a", observed=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    second, second_observation, _other_indicator, _other = occurrence(db, org, investigation, user, suffix="b", observed=datetime(2026, 1, 2, tzinfo=timezone.utc))
+    evidence = db.get(EvidenceItem, first_observation.evidence_id)
+    relationship = EntityRelationship(
+        org_id=org.id, investigation_id=investigation.id,
+        source_entity_id=first.id, target_entity_id=second.id,
+        relationship_type="connected_to", derivation_name="safe", derivation_version="v1",
+        evidence_id=evidence.id, raw_record_id=first_observation.raw_record_id,
+        event_id=first_observation.event_id, source_observation_id=first_observation.id,
+        target_observation_id=second_observation.id, source_locator_hash="a" * 64,
+        observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    global_only = Indicator(org_id=org.id, type="domain", normalized_value="global.invalid", display_value="global.invalid")
+    db.add_all((relationship, global_only)); db.commit()
+    client = TestClient(app); path = f"/api/v1/investigations/{investigation.id}/graph"; headers = header(user, org)
+    response = client.get(path, headers=headers); assert response.status_code == 200
+    body = response.json(); assert client.get(path, headers=headers).json() == body
+    assert body["policy_id"] == "canonical-graph-v1" and body["omissions"] == {"nodes": 0, "edges": 0, "reason": None}
+    node_ids = {node["id"] for node in body["nodes"]}; assert all(edge["source"] in node_ids and edge["target"] in node_ids for edge in body["edges"])
+    assert all(node["status"] == "FACT" for node in body["nodes"]) and all(edge["status"] == "FACT" for edge in body["edges"])
+    assert f"indicator:{local_indicator.id}" in node_ids and str(global_only.id) not in str(body)
+    support = body["edges"][0]["provenance"][0]
+    assert support["relationship_id"] == str(relationship.id) and support["derivation_name"] == "safe"
+    assert "raw_record_id" not in str(body) and "normalized" not in str(body) and "attributes" not in str(body)
+    assert client.get(f"{path}?entity_type=HOST", headers=headers).status_code == 200
+    assert client.get(f"{path}?evidence_id={evidence.id}", headers=headers).status_code == 200
+    assert client.get(f"{path}?evidence_id={uuid4()}", headers=headers).status_code == 404
+    assert client.get(f"{path}?unknown=true", headers=headers).status_code == 422
+    assert client.get(f"{path}?relationship_type=unsupported", headers=headers).status_code == 422
+    foreign_org, foreign_user, foreign_investigation = seed(db, "foreign-graph")
+    assert client.get(f"/api/v1/investigations/{foreign_investigation.id}/graph", headers=headers).status_code == 404
+    assert client.get(f"/api/v1/investigations/{investigation.id}/attack-graph", headers=headers).status_code == 404
+    user.is_active = False; db.commit()
+    assert client.get(path, headers=headers).status_code == 404
+
+
+def test_canonical_graph_is_the_only_public_graph_projection_route():
+    paths = {route.path for route in app.routes}
+    assert "/api/v1/investigations/{investigation_id}/graph" in paths
+    assert "/api/v1/investigations/{investigation_id}/attack-graph" not in paths
+
+
+def test_canonical_graph_uses_a_bounded_query_plan(db):
+    org, user, investigation = seed(db)
+    first, first_observation, _local_indicator, _local = occurrence(db, org, investigation, user, suffix="a", observed=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    second, second_observation, _other_indicator, _other = occurrence(db, org, investigation, user, suffix="b", observed=datetime(2026, 1, 2, tzinfo=timezone.utc))
+    db.add(EntityRelationship(
+        org_id=org.id, investigation_id=investigation.id, source_entity_id=first.id, target_entity_id=second.id,
+        relationship_type="connected_to", derivation_name="safe", derivation_version="v1",
+        evidence_id=first_observation.evidence_id, raw_record_id=first_observation.raw_record_id,
+        event_id=first_observation.event_id, source_observation_id=first_observation.id,
+        target_observation_id=second_observation.id, source_locator_hash="b" * 64,
+        observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    ))
+    db.commit()
+    statements: list[str] = []
+
+    def count_statement(_connection, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    sqlalchemy_event.listen(db.bind, "before_cursor_execute", count_statement)
+    try:
+        graph = CanonicalGraphProjectionService(db).project(org.id, investigation.id, GraphFilters())
+    finally:
+        sqlalchemy_event.remove(db.bind, "before_cursor_execute", count_statement)
+    assert graph["edges"]
+    # Projection has a fixed scope/validation/count/read plan; it must not add
+    # one query for each returned node or support row.
+    assert len(statements) <= 12
+    assert not any(statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for statement in statements)

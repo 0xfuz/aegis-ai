@@ -195,16 +195,18 @@ def list_relationships(investigation_id: UUID, principal: Principal = Depends(re
 @router.get("/{investigation_id}/graph", response_model=CanonicalGraphRead, tags=["Canonical Graph"])
 def get_canonical_graph(
     investigation_id: UUID,
+    request: Request,
     entity_type: str | None = Query(default=None),
     relationship_type: str | None = Query(default=None),
     evidence_id: UUID | None = Query(default=None),
-    start_at: datetime | None = Query(default=None),
-    end_at: datetime | None = Query(default=None),
     principal: Principal = Depends(require_permission("investigation:read")),
     db: Session = Depends(get_db),
 ) -> CanonicalGraphRead:
+    if set(request.query_params) - {"entity_type", "relationship_type", "evidence_id"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported graph query parameter.")
+    _active_principal_or_404(principal, db)
     graph = CanonicalGraphProjectionService(db).project(
         principal.org_id, investigation_id,
-        GraphFilters(entity_type, relationship_type, evidence_id, start_at, end_at),
+        GraphFilters(entity_type, relationship_type, evidence_id),
     )
     return CanonicalGraphRead.model_validate(graph)
