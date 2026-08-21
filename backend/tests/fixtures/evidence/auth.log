@@ -1,0 +1,2 @@
+Jan 01 00:00:01 fixture-host sshd[100]: Accepted password for guest from 192.0.2.10
+Jan 01 00:00:02 fixture-host sshd[101]: Failed password for synthetic_beta from 198.51.100.20
