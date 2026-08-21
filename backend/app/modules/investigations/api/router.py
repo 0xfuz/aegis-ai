@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status as http_status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.modules.identity.api.dependencies import Principal, get_current_principal, require_permission
@@ -36,14 +36,14 @@ def _active_principal_or_404(principal: Principal, db: Session) -> None:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Investigation not found.")
 
 class FindingIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1, max_length=255)
-    description: str = Field(min_length=1)
+    description: str = Field(min_length=1, max_length=4_000)
     severity: str = "medium"
     confidence: int | None = Field(default=None, ge=0, le=100)
-class FindingFromAIIn(BaseModel):
-    title: str | None = None
-    severity: str = "medium"
-class FindingStatusIn(BaseModel): status: str
+class FindingStatusIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: str
 class MitreReviewIn(BaseModel): status: str; rationale: str = ""
 @router.get("/{investigation_id}/overview", response_model=InvestigationOverview)
 def overview(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> InvestigationOverview:
@@ -59,19 +59,30 @@ def audit(investigation_id: UUID, limit: int = Query(default=100, ge=1, le=200),
     return FindingService(db).audit(principal.org_id, investigation_id, limit, offset)
 
 @router.get("/{investigation_id}/findings")
-def findings(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)):
-    return FindingService(db).list_findings(principal.org_id, investigation_id)
+def findings(
+    investigation_id: UUID,
+    request: Request,
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+):
+    if set(request.query_params) - {"status", "limit", "offset"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
+    _active_principal_or_404(principal, db)
+    return FindingService(db).list_findings(principal.org_id, investigation_id, status, limit, offset)
 @router.post("/{investigation_id}/findings")
 def create_finding(investigation_id: UUID, body: FindingIn, principal: Principal = Depends(require_permission("investigation:write")), db: Session = Depends(get_db)):
+    _active_principal_or_404(principal, db)
     return FindingService(db).create_manual(principal.org_id, investigation_id, principal.user_id, body.model_dump())
-@router.post("/intelligence/items/{item_id}/finding")
-def convert_finding(item_id: UUID, body: FindingFromAIIn, principal: Principal = Depends(require_permission("investigation:write")), db: Session = Depends(get_db)):
-    return FindingService(db).create_from_item(principal.org_id, item_id, principal.user_id, **body.model_dump())
 @router.patch("/findings/{finding_id}")
 def edit_finding(finding_id: UUID, body: FindingIn, principal: Principal = Depends(require_permission("investigation:write")), db: Session = Depends(get_db)):
+    _active_principal_or_404(principal, db)
     return FindingService(db).update(principal.org_id, finding_id, principal.user_id, body.model_dump())
 @router.post("/findings/{finding_id}/status")
 def finding_status(finding_id: UUID, body: FindingStatusIn, principal: Principal = Depends(require_permission("investigation:write")), db: Session = Depends(get_db)):
+    _active_principal_or_404(principal, db)
     return FindingService(db).status(principal.org_id, finding_id, principal.user_id, body.status)
 @router.get("/{investigation_id}/mitre-mappings")
 def mitre_mappings(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)):

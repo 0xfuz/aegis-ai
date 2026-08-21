@@ -18,13 +18,21 @@ class FindingService:
   if not item or item.org_id!=org: raise NotFoundError("Intelligence item not found.")
   return item
  def _audit(self,org,investigation,user,action,target,rationale=None): self.db.add(AuditEvent(org_id=org,investigation_id=investigation,actor_id=user,actor_type="user",action=action,target_type=type(target).__name__,target_id=target.id,occurred_at=datetime.now(timezone.utc),rationale=rationale))
- def list_findings(self,org,investigation):
+ def list_findings(self,org,investigation,status=None,limit=50,offset=0):
   InvestigationService(self.db).get_investigation(org,investigation)
-  rows=list(self.db.scalars(select(Finding).where(Finding.org_id==org,Finding.investigation_id==investigation).order_by(Finding.created_at.desc())))
-  return [self._finding(row) for row in rows]
- def _finding(self,row):
-  links=list(self.db.scalars(select(FindingFactLink).where(FindingFactLink.finding_id==row.id)))
-  return {"id":str(row.id),"title":row.title,"description":row.description,"severity":row.severity,"confidence":row.confidence,"status":row.status,"source_intelligence_item_id":str(row.source_intelligence_item_id) if row.source_intelligence_item_id else None,"source_analysis_id":str(row.source_analysis_id) if row.source_analysis_id else None,"created_at":row.created_at,"fact_links":[{"fact_id":str(x.fact_id),"fact_type":x.fact_type,"role":x.role} for x in links]}
+  allowed={"OPEN","CONFIRMED","DISMISSED","RESOLVED"}
+  if status is not None and status not in allowed: raise ValidationError("Invalid finding status.")
+  where=[Finding.org_id==org,Finding.investigation_id==investigation]
+  if status is not None: where.append(Finding.status==status)
+  total=self.db.scalar(select(func.count()).select_from(Finding).where(*where)) or 0
+  rows=list(self.db.scalars(select(Finding).where(*where).order_by(Finding.created_at.desc(),Finding.id.desc()).limit(limit).offset(offset)))
+  links=list(self.db.scalars(select(FindingFactLink).where(FindingFactLink.org_id==org,FindingFactLink.finding_id.in_([row.id for row in rows])))) if rows else []
+  by_finding={}
+  for link in links: by_finding.setdefault(link.finding_id,[]).append(link)
+  return {"items":[self._finding(row,by_finding.get(row.id,[])) for row in rows],"limit":limit,"offset":offset,"returned_count":len(rows),"total":total}
+ def _finding(self,row,links=None):
+  if links is None: links=list(self.db.scalars(select(FindingFactLink).where(FindingFactLink.finding_id==row.id)))
+  return {"id":str(row.id),"title":row.title[:255],"description":row.description[:1000],"severity":row.severity,"confidence":row.confidence,"status":row.status,"created_at":row.created_at,"updated_at":row.updated_at,"provenance":{"available":bool(links),"omitted":0},"fact_links":[{"fact_id":str(x.fact_id),"fact_type":x.fact_type,"role":x.role} for x in links[:50]]}
  def create_manual(self,org,investigation,user,data):
   InvestigationService(self.db).get_investigation(org,investigation); row=Finding(org_id=org,investigation_id=investigation,analyst_id=user,**data);self.db.add(row);self.db.flush();self._audit(org,investigation,user,"FINDING_CREATED_MANUALLY",row);self.db.commit();return self._finding(row)
  def create_from_item(self,org,item_id,user,title=None,severity="medium"):
@@ -46,7 +54,14 @@ class FindingService:
   if not row or row.org_id!=org:raise NotFoundError("Finding not found.")
   allowed={"OPEN":{"CONFIRMED","DISMISSED"},"CONFIRMED":{"RESOLVED"},"DISMISSED":set(),"RESOLVED":set()}
   if status not in allowed.get(row.status,set()):raise ValidationError(f"Invalid finding transition from {row.status} to {status}.")
-  row.status=status;self._audit(org,row.investigation_id,user,"FINDING_STATUS_CHANGED",row,status);self.db.commit();return self._finding(row)
+  try:
+   row.status=status
+   self._audit(org,row.investigation_id,user,"FINDING_STATUS_CHANGED",row,status)
+   self.db.commit()
+  except Exception:
+   self.db.rollback()
+   raise ValidationError("Unable to save finding review.") from None
+  return self._finding(row)
  def list_mitre(self,org,investigation):
   InvestigationService(self.db).get_investigation(org,investigation);rows=self.db.scalars(select(MitreMapping).where(MitreMapping.org_id==org,MitreMapping.investigation_id==investigation).order_by(MitreMapping.created_at.desc()))
   return [self._mapping(row) for row in rows]
