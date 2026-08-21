@@ -44,7 +44,10 @@ class FindingIn(BaseModel):
 class FindingStatusIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: str
-class MitreReviewIn(BaseModel): status: str; rationale: str = ""
+class MitreReviewIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: str = Field(min_length=1, max_length=20)
+    rationale: str = Field(default="", max_length=1_000)
 @router.get("/{investigation_id}/overview", response_model=InvestigationOverview)
 def overview(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> InvestigationOverview:
     _active_principal_or_404(principal, db)
@@ -84,8 +87,44 @@ def edit_finding(finding_id: UUID, body: FindingIn, principal: Principal = Depen
 def finding_status(finding_id: UUID, body: FindingStatusIn, principal: Principal = Depends(require_permission("investigation:write")), db: Session = Depends(get_db)):
     _active_principal_or_404(principal, db)
     return FindingService(db).status(principal.org_id, finding_id, principal.user_id, body.status)
+def _mitre_page(
+    investigation_id: UUID,
+    request: Request,
+    status: str | None,
+    limit: int,
+    offset: int,
+    principal: Principal,
+    db: Session,
+):
+    if set(request.query_params) - {"status", "limit", "offset"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
+    _active_principal_or_404(principal, db)
+    return FindingService(db).list_mitre_page(principal.org_id, investigation_id, status, limit, offset)
+
+
+@router.get("/{investigation_id}/mitre")
+def mitre(
+    investigation_id: UUID,
+    request: Request,
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+):
+    return _mitre_page(investigation_id, request, status, limit, offset, principal, db)
+
+
+# Compatibility read route retained for the legacy workspace. New consumers
+# use the bounded /mitre contract above; this route retains its historical
+# array shape only until U4-C2 replaces that consumer.
 @router.get("/{investigation_id}/mitre-mappings")
-def mitre_mappings(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)):
+def mitre_mappings(
+    investigation_id: UUID,
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+):
+    _active_principal_or_404(principal, db)
     return FindingService(db).list_mitre(principal.org_id, investigation_id)
 @router.post("/mitre-mappings/{mapping_id}/review")
 def review_mitre(mapping_id: UUID, body: MitreReviewIn, principal: Principal = Depends(require_permission("investigation:write")), db: Session = Depends(get_db)):

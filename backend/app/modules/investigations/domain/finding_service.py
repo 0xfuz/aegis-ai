@@ -63,8 +63,24 @@ class FindingService:
    raise ValidationError("Unable to save finding review.") from None
   return self._finding(row)
  def list_mitre(self,org,investigation):
-  InvestigationService(self.db).get_investigation(org,investigation);rows=self.db.scalars(select(MitreMapping).where(MitreMapping.org_id==org,MitreMapping.investigation_id==investigation).order_by(MitreMapping.created_at.desc()))
+  InvestigationService(self.db).get_investigation(org,investigation)
+  rows=self.db.scalars(select(MitreMapping).where(MitreMapping.org_id==org,MitreMapping.investigation_id==investigation).order_by(MitreMapping.created_at.desc()))
   return [self._mapping(row) for row in rows]
+ def list_mitre_page(self,org,investigation,status=None,limit=50,offset=0):
+  InvestigationService(self.db).get_investigation(org,investigation)
+  allowed={"PROPOSED","CONFIRMED","REJECTED"}
+  if status is not None and status not in allowed: raise ValidationError("Invalid MITRE mapping status.")
+  where=[MitreMapping.org_id==org,MitreMapping.investigation_id==investigation]
+  if status is not None: where.append(MitreMapping.status==status)
+  total=self.db.scalar(select(func.count()).select_from(MitreMapping).where(*where)) or 0
+  rows=list(self.db.scalars(select(MitreMapping).where(*where).order_by(MitreMapping.created_at.desc(),MitreMapping.id.desc()).limit(limit).offset(offset)))
+  mapping_ids=[row.id for row in rows]
+  counts={mapping_id:count for mapping_id,count in self.db.execute(select(MitreMappingFactLink.mapping_id,func.count()).where(MitreMappingFactLink.org_id==org,MitreMappingFactLink.mapping_id.in_(mapping_ids)).group_by(MitreMappingFactLink.mapping_id))} if mapping_ids else {}
+  ranked_links=select(MitreMappingFactLink.id.label("id"),func.row_number().over(partition_by=MitreMappingFactLink.mapping_id,order_by=MitreMappingFactLink.id).label("position")).where(MitreMappingFactLink.org_id==org,MitreMappingFactLink.mapping_id.in_(mapping_ids)).subquery() if mapping_ids else None
+  links=list(self.db.scalars(select(MitreMappingFactLink).join(ranked_links,MitreMappingFactLink.id==ranked_links.c.id).where(ranked_links.c.position<=50).order_by(MitreMappingFactLink.mapping_id,MitreMappingFactLink.id))) if ranked_links is not None else []
+  by_mapping={}
+  for link in links: by_mapping.setdefault(link.mapping_id,[]).append(link)
+  return {"items":[self._mapping_read(row,by_mapping.get(row.id,[]),counts.get(row.id,0)) for row in rows],"limit":limit,"offset":offset,"returned_count":len(rows),"total":total}
  def overview(self,org,investigation):
   InvestigationService(self.db).get_investigation(org,investigation)
   count=lambda model,*where:self.db.scalar(select(func.count()).select_from(model).where(*where)) or 0
@@ -104,9 +120,16 @@ class FindingService:
  def _mapping(self,row):
   links=self.db.scalars(select(MitreMappingFactLink).where(MitreMappingFactLink.mapping_id==row.id))
   return {"id":str(row.id),"technique_id":row.technique_id,"technique_name":row.technique_name,"tactic":row.tactic,"confidence":row.confidence,"ai_rationale":row.ai_rationale,"status":row.status,"source_intelligence_item_id":str(row.source_intelligence_item_id) if row.source_intelligence_item_id else None,"finding_id":str(row.finding_id) if row.finding_id else None,"fact_links":[{"fact_id":str(x.fact_id),"role":x.role} for x in links]}
+ def _mapping_read(self,row,links,count):
+  return {"id":str(row.id),"technique_id":row.technique_id[:32],"technique_name":row.technique_name[:255] if row.technique_name else None,"tactic":row.tactic[:100] if row.tactic else None,"status":row.status,"confidence":row.confidence,"review_rationale":row.review_rationale[:1000] if row.review_rationale else None,"created_at":row.created_at,"reviewed_at":row.reviewed_at,"provenance":{"available":bool(count),"omitted":max(0,count-50)},"fact_links":[{"fact_id":str(x.fact_id),"fact_type":x.fact_type,"role":x.role} for x in links[:50]]}
  def review_mapping(self,org,mapping_id,user,status,rationale):
   if status not in {"CONFIRMED","REJECTED"} or (status=="REJECTED" and not rationale.strip()):raise ValidationError("A rejection rationale is required.")
-  row=self.db.get(MitreMapping,mapping_id)
-  if not row or row.org_id!=org:raise NotFoundError("MITRE mapping not found.")
+  row=self.db.scalar(select(MitreMapping).where(MitreMapping.id==mapping_id,MitreMapping.org_id==org).with_for_update())
+  if not row:raise NotFoundError("MITRE mapping not found.")
   if row.status!="PROPOSED":raise ValidationError("Only proposed MITRE mappings can be reviewed.")
-  row.status=status;row.reviewed_by_id=user;row.reviewed_at=datetime.now(timezone.utc);row.review_rationale=rationale;self._audit(org,row.investigation_id,user,f"MITRE_{status}",row,rationale);self.db.commit();return self._mapping(row)
+  try:
+   row.status=status;row.reviewed_by_id=user;row.reviewed_at=datetime.now(timezone.utc);row.review_rationale=rationale;self._audit(org,row.investigation_id,user,f"MITRE_{status}",row,rationale);self.db.commit()
+  except Exception:
+   self.db.rollback()
+   raise ValidationError("Unable to save MITRE mapping review.") from None
+  return self._mapping_read(row,[],0)
