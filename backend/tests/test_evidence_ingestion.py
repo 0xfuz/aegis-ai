@@ -6,7 +6,7 @@ import pytest
 
 from app.core.config import Settings
 from app.modules.evidence.domain.service import EvidenceIngestionService
-from app.modules.evidence.infrastructure.models import AuditEvent, EntityRelationship, Event, EvidenceItem, EvidenceParseRun, IndicatorOccurrence
+from app.modules.evidence.infrastructure.models import AuditEvent, EntityRelationship, Event, EvidenceItem, EvidenceParseRun, IndicatorOccurrence, RawRecord
 from app.modules.evidence.infrastructure.repository import EvidenceRepository
 from app.modules.identity.infrastructure.models import Organization, Role, User
 from app.modules.investigations.infrastructure.models import Investigation, InvestigationStatus, Severity
@@ -14,6 +14,21 @@ from app.shared.database import SessionLocal
 from app.shared.exceptions import ConflictError, ValidationError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "evidence"
+
+
+def _synthetic_auth_log(tmp_path: Path) -> bytes:
+    """Write the minimum safe plaintext fixture required by PlainTextParser.
+
+    This intentionally uses synthetic actor labels and documentation-range IPs;
+    it is test input, not a copied authentication log.
+    """
+    content = (
+        "Jan 01 00:00:01 fixture-host sshd[100]: Accepted password for synthetic_alpha from 192.0.2.10\n"
+        "Jan 01 00:00:02 fixture-host sshd[101]: Failed password for synthetic_beta from 198.51.100.20\n"
+    ).encode("utf-8")
+    path = tmp_path / "auth.log"
+    path.write_bytes(content)
+    return path.read_bytes()
 
 
 class Upload:
@@ -49,15 +64,19 @@ def _service(db, tmp_path, **limits):
 
 def test_ingestion_persists_complete_fact_chain_and_provenance(db, tmp_path):
     org, user, investigation = _context(db)
-    upload = Upload("auth.log", (FIXTURES / "auth.log").read_bytes())
+    content = _synthetic_auth_log(tmp_path)
+    upload = Upload("auth.log", content)
     evidence = _service(db, tmp_path).ingest(org.id, investigation.id, user.id, upload)
 
     assert evidence.parsing_status == "complete"
-    assert evidence.sha256 == __import__("hashlib").sha256((FIXTURES / "auth.log").read_bytes()).hexdigest()
+    assert evidence.sha256 == __import__("hashlib").sha256(content).hexdigest()
     assert db.query(EvidenceParseRun).filter_by(evidence_id=evidence.id, status="complete").count() == 1
     assert db.query(Event).filter_by(evidence_id=evidence.id).count() == 2
     assert db.query(IndicatorOccurrence).filter_by(evidence_id=evidence.id).count() >= 2
     assert db.query(EntityRelationship).filter_by(evidence_id=evidence.id).count() >= 2
+    assert [row.ordinal for row in db.query(RawRecord).filter_by(evidence_id=evidence.id).order_by(RawRecord.ordinal)] == [0, 1]
+    assert db.query(Event).filter_by(evidence_id=evidence.id, org_id=org.id, investigation_id=investigation.id).count() == 2
+    assert "password" not in evidence.original_filename.lower()
     assert {row.action for row in db.query(AuditEvent).filter_by(investigation_id=investigation.id)} >= {"EVIDENCE_ACCEPTED", "PARSE_STARTED", "PARSE_COMPLETED"}
 
 
@@ -94,7 +113,7 @@ def test_limits_parse_failure_and_no_partial_active_facts(db, tmp_path):
     org, user, investigation = _context(db)
     service = _service(db, tmp_path, MAX_RAW_RECORDS=1)
     with pytest.raises(ValidationError):
-        service.ingest(org.id, investigation.id, user.id, Upload("auth.log", (FIXTURES / "auth.log").read_bytes()))
+        service.ingest(org.id, investigation.id, user.id, Upload("auth.log", _synthetic_auth_log(tmp_path)))
     evidence = db.query(EvidenceItem).filter_by(investigation_id=investigation.id).one()
     assert evidence.parsing_status == "failed"
     assert db.query(Event).filter_by(evidence_id=evidence.id).count() == 0
