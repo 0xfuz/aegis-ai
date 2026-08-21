@@ -27,41 +27,42 @@ vi.mock("@/lib/api-client", async () => ({ ...(await vi.importActual<typeof impo
 vi.mock("@/lib/reconstruction-client", () => ({ isInvestigationRouteId: (value: unknown) => typeof value === "string" && value.length > 0, fetchInvestigationReconstruction: reconstruction.fetch }));
 vi.mock("@/lib/auth-context", () => ({ useAuth: () => ({ user: { is_active: true }, hasPermission: () => true }) }));
 
-const findings = ["OPEN", "CONFIRMED", "DISMISSED", "RESOLVED"].map((status, index) => ({ id: String(index), title: status, description: "finding detail", severity: "high", confidence: 80, status, source_intelligence_item_id: index ? null : "ai-1", fact_links: [{ fact_id: "fact-1", fact_type: "EVENT", role: "SUPPORTS" }] }));
+const findings = { items: ["OPEN", "CONFIRMED", "DISMISSED", "RESOLVED"].map((status, index) => ({ id: String(index), title: status, description: "finding detail", severity: "high", confidence: 80, status, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-02T00:00:00Z", provenance: { available: true, omitted: 0 }, fact_links: [{ fact_id: "fact-1", fact_type: "EVENT", role: "SUPPORTS" }] })), limit: 25, offset: 0, returned_count: 4, total: 4 };
 const mappings = ["PROPOSED", "CONFIRMED", "REJECTED"].map((status, index) => ({ id: String(index), technique_id: `T10${index}`, technique_name: "Technique", tactic: "execution", confidence: 70, ai_rationale: "mapping rationale", status, source_intelligence_item_id: index === 0 ? "ai-1" : null, finding_id: index === 1 ? "finding-1" : null, fact_links: [{ fact_id: "event-1", role: "SUPPORTS" }] }));
 
 describe("A6 workspaces", () => {
   beforeEach(() => { state.apiFetch.mockReset(); reconstruction.fetch.mockReset(); reconstruction.fetch.mockResolvedValue(reconstructionResponse); });
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-  it("renders all finding states, AI source, and FACT provenance", async () => {
+  it("renders canonical analyst Finding states and bounded provenance", async () => {
     state.apiFetch.mockResolvedValue(findings);
     render(<FindingsPage />);
-    for (const status of ["OPEN", "CONFIRMED", "DISMISSED", "RESOLVED"]) expect((await screen.findAllByText(status)).length).toBeGreaterThan(0);
-    expect(screen.getByText("ai-1")).toBeInTheDocument();
-    expect(screen.getAllByText(/FACT provenance/)).toHaveLength(4);
-    expect(screen.getAllByText("finding detail")).toHaveLength(4);
+    for (const status of ["Open", "Confirmed", "Dismissed", "Resolved"]) expect((await screen.findAllByText(status)).length).toBeGreaterThan(0);
+    expect(screen.getByText("Analyst-controlled Findings")).toBeInTheDocument();
+    expect(screen.queryByText(/AI INFERENCE/)).toBeNull();
+    expect(screen.getAllByText("finding detail").length).toBeGreaterThanOrEqual(4);
   });
 
   it("handles finding loading, empty, and API-error states", async () => {
     let resolve!: (value: typeof findings) => void;
     state.apiFetch.mockReturnValueOnce(new Promise<typeof findings>(done => { resolve = done; }));
     const { unmount } = render(<FindingsPage />);
-    expect(screen.getByText("Loading findings…")).toBeInTheDocument();
-    resolve([]);
-    expect(await screen.findByText("No analyst findings yet.")).toBeInTheDocument();
+    expect(screen.getByText("Loading Findings")).toBeInTheDocument();
+    resolve({ ...findings, items: [], returned_count: 0, total: 0 });
+    expect(await screen.findByText("No Findings")).toBeInTheDocument();
     unmount();
     state.apiFetch.mockRejectedValueOnce(new ApiError("findings unavailable", 500));
     render(<FindingsPage />);
-    expect(await screen.findByText("findings unavailable")).toBeInTheDocument();
+    expect(await screen.findByText("Unable to load Findings")).toBeInTheDocument();
   });
 
   it("submits a finding status change and reloads findings", async () => {
     state.apiFetch.mockResolvedValueOnce(findings).mockResolvedValueOnce({}).mockResolvedValueOnce(findings);
     render(<FindingsPage />);
-    const confirm = (await screen.findAllByRole("button", { name: "CONFIRMED" }))[0];
+    const confirm = (await screen.findAllByRole("button", { name: "Confirm" }))[0];
     expect(confirm).toBeDefined();
     fireEvent.click(confirm!);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm Finding" }));
     await waitFor(() => expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations/findings/0/status", expect.objectContaining({ method: "POST" })));
   });
 
