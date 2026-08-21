@@ -8,7 +8,7 @@ const apiFetch = vi.hoisted(() => vi.fn());
 const reconstruction = vi.hoisted(() => vi.fn());
 const auth = vi.hoisted(() => ({ canWrite: true, active: true }));
 
-vi.mock("next/navigation", () => ({ useParams: () => ({ id: "case-42" }), usePathname: () => "/investigations/case-42/intelligence" }));
+vi.mock("next/navigation", () => ({ useParams: () => ({ id: "case-42" }), usePathname: () => "/investigations/case-42/intelligence", useRouter: () => ({ replace: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("@/lib/api-client", () => ({ apiFetch, ApiError: class ApiError extends Error {}, downloadFile: vi.fn() }));
 vi.mock("@/lib/reconstruction-client", () => ({ isInvestigationRouteId: (value: unknown) => typeof value === "string" && value.length > 0, fetchInvestigationReconstruction: reconstruction }));
@@ -19,7 +19,7 @@ const response = { policy_id: "reconstruction-read-v1", investigation: { id: "ca
 describe("Intelligence reconstruction fetch seam", () => {
   it("acknowledges the certified reconstruction without replacing the legacy notebook", async () => {
     reconstruction.mockResolvedValue(response);
-    apiFetch.mockResolvedValue({ status: "COMPLETED", generated_at: null, items: [] });
+    apiFetch.mockResolvedValue({ items: [], limit: 20, offset: 0 });
     render(<IntelligencePage />);
     expect(await screen.findByRole("heading", { name: "Certified reconstruction overview" })).toBeInTheDocument();
     expect(reconstruction).toHaveBeenCalledWith("case-42", expect.objectContaining({ signal: expect.any(AbortSignal) }));
@@ -28,7 +28,8 @@ describe("Intelligence reconstruction fetch seam", () => {
 
   it("only exposes review controls to an active principal with investigation write permission", async () => {
     reconstruction.mockResolvedValue(response);
-    apiFetch.mockResolvedValue({ status: "COMPLETED", generated_at: null, items: [{ id: "claim-1", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "reviewable", confidence: 50, review_status: "PENDING", fact_links: [] }] });
+    const completed = { id: "run-1", investigation_id: "case-42", status: "COMPLETED", request_key: "ui:test", input_hash: "hash", predecessor_analysis_id: null, context_version: null, builder_version: null, prompt_template_version: "prompt", output_schema_version: "schema", generated_at: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", error_summary: null };
+    apiFetch.mockResolvedValueOnce({ items: [completed], limit: 20, offset: 0 }).mockResolvedValueOnce({ status: "COMPLETED", generated_at: null, items: [{ id: "claim-1", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "reviewable", confidence: 50, review_status: "PENDING", fact_links: [] }] });
     auth.canWrite = false;
     const view = render(<IntelligencePage />);
     await screen.findByText("reviewable");

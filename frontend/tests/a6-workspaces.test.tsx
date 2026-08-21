@@ -21,7 +21,7 @@ const reconstructionResponse = {
   pagination: { section_omissions: {}, total_omitted: 0 },
   warnings: [],
 };
-vi.mock("next/navigation", () => ({ useParams: () => ({ id: "case-1" }), usePathname: () => "/investigations/case-1/findings" }));
+vi.mock("next/navigation", () => ({ useParams: () => ({ id: "case-1" }), usePathname: () => "/investigations/case-1/findings", useRouter: () => ({ replace: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
 vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a> }));
 vi.mock("@/lib/api-client", async () => ({ ...(await vi.importActual<typeof import("@/lib/api-client")>("@/lib/api-client")), apiFetch: state.apiFetch }));
 vi.mock("@/lib/reconstruction-client", () => ({ isInvestigationRouteId: (value: unknown) => typeof value === "string" && value.length > 0, fetchInvestigationReconstruction: reconstruction.fetch }));
@@ -65,35 +65,12 @@ describe("A6 workspaces", () => {
     await waitFor(() => expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations/findings/0/status", expect.objectContaining({ method: "POST" })));
   });
 
-  it("only exposes conversion for confirmed eligible intelligence and reloads after conversion", async () => {
-    const analysis = { status: "COMPLETED", generated_at: null, items: [{ id: "a", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "confirmed", confidence: 80, review_status: "CONFIRMED", fact_links: [{ fact_id: "event-1", role: "SUPPORTS" }] }, { id: "u", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "unreviewed", confidence: 80, review_status: "PENDING", fact_links: [] }, { id: "r", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "rejected", confidence: 80, review_status: "REJECTED", fact_links: [] }] };
-    state.apiFetch.mockImplementation((path: string) => {
-      if (path.endsWith("/intelligence/runs?limit=20&offset=0")) return Promise.resolve({ items: [], limit: 20, offset: 0 });
-      if (path.endsWith("/intelligence/items/a/finding")) return Promise.resolve({});
-      if (path.endsWith("/intelligence")) return Promise.resolve(analysis);
-      return Promise.resolve({});
-    });
+  it("keeps the Intelligence workspace free of legacy finding conversion controls", async () => {
+    state.apiFetch.mockResolvedValue({ items: [], limit: 20, offset: 0 });
     render(<IntelligencePage />);
-    fireEvent.click(await screen.findByText("Observation"));
-    expect(screen.getAllByText("Convert to Finding")).toHaveLength(1);
-    fireEvent.click(screen.getByText("Convert to Finding"));
-    await waitFor(() => expect(state.apiFetch).toHaveBeenCalledWith("/api/v1/investigations/intelligence/items/a/finding", expect.objectContaining({ method: "POST" })));
-    expect(screen.getAllByText("unreviewed").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("rejected").length).toBeGreaterThan(0);
-  });
-
-  it("surfaces an intelligence conversion API failure", async () => {
-    const analysis = { status: "COMPLETED", generated_at: null, items: [{ id: "a", kind: "OBSERVATION", claim_type: "OBSERVATION", origin: "AI", statement: "confirmed", confidence: 80, review_status: "CONFIRMED", fact_links: [] }] };
-    state.apiFetch.mockImplementation((path: string) => {
-      if (path.endsWith("/intelligence/runs?limit=20&offset=0")) return Promise.resolve({ items: [], limit: 20, offset: 0 });
-      if (path.endsWith("/intelligence/items/a/finding")) return Promise.reject(new ApiError("conversion failed", 422));
-      if (path.endsWith("/intelligence")) return Promise.resolve(analysis);
-      return Promise.resolve({});
-    });
-    render(<IntelligencePage />);
-    fireEvent.click(await screen.findByText("Observation"));
-    fireEvent.click(screen.getByText("Convert to Finding"));
-    expect(await screen.findByText("conversion failed")).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Intelligence Run" });
+    expect(screen.queryByText("Convert to Finding")).toBeNull();
+    expect(state.apiFetch.mock.calls.some(([path]) => String(path).includes("/finding"))).toBe(false);
   });
 
   it("renders MITRE states with sources and FACT provenance", async () => {

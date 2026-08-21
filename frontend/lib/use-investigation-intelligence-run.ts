@@ -36,6 +36,7 @@ export function safeFailureCategory(run: IntelligenceRun): string {
 export function useInvestigationIntelligenceRun(
   investigationId: unknown,
   onCompleted: () => void | Promise<void>,
+  requestedCompletedRunId?: string | null,
 ) {
   const [run, setRun] = useState<IntelligenceRun | null>(null);
   const [runs, setRuns] = useState<IntelligenceRun[]>([]);
@@ -69,10 +70,13 @@ export function useInvestigationIntelligenceRun(
       .then((result) => {
         if (controller.signal.aborted || sequence !== requestSequence.current) return;
         const active = result.items.find((candidate) => isActiveIntelligenceRun(candidate)) ?? null;
-        const completed = result.items.find((candidate) => candidate.status === "COMPLETED") ?? null;
+        const completed = requestedCompletedRunId
+          ? result.items.find((candidate) => candidate.id === requestedCompletedRunId && candidate.status === "COMPLETED") ?? null
+          : result.items.find((candidate) => candidate.status === "COMPLETED") ?? null;
         setRuns(result.items);
         setLatestRun(result.items[0] ?? null);
-        setRun(active ?? completed);
+        setRun(requestedCompletedRunId ? completed : active ?? completed);
+        if (requestedCompletedRunId && !completed) setError("The selected completed analysis is unavailable.");
         setInitializing(false);
       })
       .catch((nextError: unknown) => {
@@ -84,7 +88,7 @@ export function useInvestigationIntelligenceRun(
         setError(errorMessage(nextError));
       });
     return () => controller.abort();
-  }, [investigationId]);
+  }, [investigationId, requestedCompletedRunId]);
 
   useEffect(() => {
     const activeRun = run;
