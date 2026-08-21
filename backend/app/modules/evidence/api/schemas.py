@@ -171,3 +171,62 @@ class EntityObservationRead(BaseModel):
     raw_record_id: UUID
     event_id: UUID | None
     observed_at: datetime | None
+
+
+class EntityListItem(BaseModel):
+    id: UUID
+    type: str = Field(max_length=50)
+    display_value: str = Field(max_length=2048)
+    observation_count: int
+    first_observed_at: datetime | None
+    last_observed_at: datetime | None
+    provenance_available_count: int
+
+
+class EntityObservationItem(BaseModel):
+    id: UUID
+    observed_at: datetime | None
+    extractor_name: str = Field(max_length=100)
+    extractor_version: str = Field(max_length=100)
+    evidence_id: UUID
+    raw_record_id: UUID
+    event_id: UUID | None
+    provenance_status: str = Field(max_length=64)
+
+
+class IndicatorOccurrenceItem(BaseModel):
+    id: UUID
+    indicator_id: UUID
+    type: str = Field(max_length=50)
+    canonical_value: str = Field(max_length=2048)
+    observed_at: datetime | None
+    extractor_name: str = Field(max_length=100)
+    extractor_version: str = Field(max_length=100)
+    evidence_id: UUID
+    raw_record_id: UUID
+    event_id: UUID | None
+    provenance_status: str = Field(max_length=64)
+
+
+class EntityPage(BaseModel):
+    items: list[EntityListItem]
+    limit: int
+    offset: int
+    returned_count: int
+    total: int
+
+
+class EntityObservationPage(BaseModel):
+    items: list[EntityObservationItem]
+    limit: int
+    offset: int
+    returned_count: int
+    total: int
+
+
+class IndicatorOccurrencePage(BaseModel):
+    items: list[IndicatorOccurrenceItem]
+    limit: int
+    offset: int
+    returned_count: int
+    total: int

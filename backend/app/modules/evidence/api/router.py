@@ -11,10 +11,12 @@ from app.core.config import get_settings
 from app.modules.evidence.api.schemas import (
     EntityRead, EntityRelationshipRead, EventRead, EvidenceDetail, EvidenceRead, EvidenceInventoryPage, TimelinePage,
     IndicatorOccurrenceRead, IndicatorRead, EntityObservationRead, RawRecordRead,
+    EntityPage, EntityObservationPage, IndicatorOccurrencePage,
 )
 from app.modules.evidence.domain.service import EvidenceIngestionService
 from app.modules.evidence.domain.read_projection import EvidenceInventoryService
 from app.modules.evidence.domain.timeline_projection import TimelineProjectionService
+from app.modules.evidence.domain.occurrence_projection import OccurrenceProjectionService
 from app.modules.evidence.infrastructure.models import AuditEvent, EvidenceItem, EvidenceParseRun
 from app.modules.evidence.infrastructure.repository import EvidenceRepository
 from app.modules.evidence.infrastructure.storage import EvidenceStorage
@@ -162,24 +164,27 @@ def timeline(
     ))
 
 
-@router.get("/{investigation_id}/indicators", response_model=list[IndicatorRead])
-def list_indicators(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[IndicatorRead]:
-    return [IndicatorRead.model_validate(row) for row in EvidenceRepository(db).indicators(principal.org_id, investigation_id)]
+def _bounded_query(request: Request) -> None:
+    if set(request.query_params) - {"limit", "offset"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
 
 
-@router.get("/{investigation_id}/indicators/{indicator_id}/occurrences", response_model=list[IndicatorOccurrenceRead])
-def list_indicator_occurrences(investigation_id: UUID, indicator_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[IndicatorOccurrenceRead]:
-    return [IndicatorOccurrenceRead.model_validate(row) for row in EvidenceRepository(db).indicator_occurrences(principal.org_id, investigation_id, indicator_id)]
+@router.get("/{investigation_id}/indicators", response_model=IndicatorOccurrencePage)
+def list_indicators(investigation_id: UUID, request: Request, limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0), principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> IndicatorOccurrencePage:
+    _bounded_query(request); _active_principal_or_404(principal, db)
+    return IndicatorOccurrencePage.model_validate(OccurrenceProjectionService(db).indicators(principal.org_id, investigation_id, limit, offset))
 
 
-@router.get("/{investigation_id}/entities", response_model=list[EntityRead])
-def list_entities(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[EntityRead]:
-    return [EntityRead.model_validate(row) for row in EvidenceRepository(db).entities(principal.org_id, investigation_id)]
+@router.get("/{investigation_id}/entities", response_model=EntityPage)
+def list_entities(investigation_id: UUID, request: Request, limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0), principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> EntityPage:
+    _bounded_query(request); _active_principal_or_404(principal, db)
+    return EntityPage.model_validate(OccurrenceProjectionService(db).entities(principal.org_id, investigation_id, limit, offset))
 
 
-@router.get("/{investigation_id}/entities/{entity_id}/observations", response_model=list[EntityObservationRead])
-def list_entity_observations(investigation_id: UUID, entity_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[EntityObservationRead]:
-    return [EntityObservationRead.model_validate(row) for row in EvidenceRepository(db).entity_observations(principal.org_id, investigation_id, entity_id)]
+@router.get("/{investigation_id}/entities/{entity_id}/observations", response_model=EntityObservationPage)
+def list_entity_observations(investigation_id: UUID, entity_id: UUID, request: Request, limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0), principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> EntityObservationPage:
+    _bounded_query(request); _active_principal_or_404(principal, db)
+    return EntityObservationPage.model_validate(OccurrenceProjectionService(db).entity_observations(principal.org_id, investigation_id, entity_id, limit, offset))
 
 
 @router.get("/{investigation_id}/relationships", response_model=list[EntityRelationshipRead])
