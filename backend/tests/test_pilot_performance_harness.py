@@ -12,6 +12,7 @@ def test_pilot_harness_is_bounded_disposable_and_cleans_up():
     assert "preserved R4 resources are never a harness target" in text
     assert "trap cleanup EXIT INT TERM" in text
     assert "down --volumes --remove-orphans" in text
+    assert "docker system prune" not in text and "docker volume prune" not in text
     assert "--result-dir" in text and "--preflight-only" in text
     assert "result directory must not be a symlink" in text
     assert "unsafe result directory" in text
@@ -32,6 +33,27 @@ def test_pilot_harness_uses_loopback_http_contracts_and_disabled_ai_only():
     assert '--profile ollama' not in text
     assert "psql" not in text and "INSERT INTO" not in text
     assert "ingest/wazuh/v1" not in text  # the bounded driver owns HTTP request details
+
+
+def test_readiness_retries_transient_startup_failures_and_requires_both_http_contracts():
+    text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    assert 'while (( SECONDS < deadline )); do' in text
+    assert '--connect-timeout 2 --max-time 5' in text
+    assert 'sleep 2' in text
+    assert 'SAFE_FAILURE_CATEGORY="SERVICE_READINESS_TIMEOUT"' in text
+    assert 'wait_http "api" "$API_ORIGIN/api/v1/health" "Aegis AI"' in text
+    assert 'wait_http "frontend" "$FRONTEND_ORIGIN/healthz" "frontend"' in text
+    assert text.index('wait_http "frontend"') < text.rindex('\n  measure\n}')
+    assert '2>/dev/null' in text and 'never printed or written to an artifact' in text
+
+
+def test_readiness_failure_evidence_and_summary_are_aggregate_only_with_real_newlines():
+    text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    for key in ('failed_stage', 'safe_failure_category', 'elapsed_seconds', 'cleanup'):
+        assert key in text
+    assert "write_operator_summary" in text
+    assert "printf 'V1-B2 STATUS: NOT MEASURED\\nHarness exit category" in text
+    assert "curl output" not in text.lower()
 
 
 def test_pilot_driver_is_required_and_uses_no_database_path():

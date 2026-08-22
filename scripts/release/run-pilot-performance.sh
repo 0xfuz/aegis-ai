@@ -23,6 +23,10 @@ RUNTIME_DIR=""
 RESULT_DIR="${AEGIS_V1B2_RESULT_DIR:-}"
 PREFLIGHT_ONLY=false
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+FAILED_STAGE=""
+SAFE_FAILURE_CATEGORY=""
+FAILED_SERVICE=""
+FAILED_ELAPSED_SECONDS=""
 
 fail() { printf '%s\n' "pilot-performance: $*" >&2; exit 2; }
 
@@ -83,19 +87,43 @@ write_result() {
   mv -f -- "$temporary" "$RESULT_DIR/$name"
 }
 
+write_operator_summary() {
+  local status="$1" cleanup_status="$2" temporary
+  temporary="$RESULT_DIR/.operator-summary.txt.$$"
+  umask 077
+  printf 'V1-B2 STATUS: NOT MEASURED\nHarness exit category: %s\nCleanup: %s\n' "$status" "$cleanup_status" >"$temporary"
+  if [[ -n "$SAFE_FAILURE_CATEGORY" ]]; then
+    printf 'Safe failure category: %s\nFailed stage: %s\nService: %s\nElapsed seconds: %s\n' \
+      "$SAFE_FAILURE_CATEGORY" "$FAILED_STAGE" "$FAILED_SERVICE" "$FAILED_ELAPSED_SECONDS" >>"$temporary"
+  fi
+  printf 'No credentials, payloads, response bodies, logs, or environment values are retained.\n' >>"$temporary"
+  chmod 600 "$temporary"
+  mv -f -- "$temporary" "$RESULT_DIR/operator-summary.txt"
+}
+
+record_readiness_timeout() {
+  FAILED_STAGE="readiness"
+  SAFE_FAILURE_CATEGORY="SERVICE_READINESS_TIMEOUT"
+  FAILED_SERVICE="$1"
+  FAILED_ELAPSED_SECONDS="$2"
+  fail "SERVICE_READINESS_TIMEOUT"
+}
+
 cleanup() {
   local status=$?
+  local cleanup_status="not_required"
   if [[ -n "${RUNTIME_DIR}" && -d "${RUNTIME_DIR}" ]]; then
     # The generated env/secret files and aggregate-only measurements are
     # disposable; never leave them in the repository or host temp space.
     docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" \
       -f docker-compose.production.yml down --volumes --remove-orphans >/dev/null 2>&1 || true
     rm -rf -- "$RUNTIME_DIR"
+    cleanup_status="attempted"
   fi
   if [[ -n "${RESULT_DIR}" && -d "${RESULT_DIR}" ]]; then
     write_result exit-code "$status"
-    write_result status.json "{\"v1_b2_status\":\"NOT_MEASURED\",\"harness_exit_code\":$status,\"cleanup\":\"attempted\"}"
-    write_result operator-summary.txt "V1-B2 STATUS: NOT MEASURED\nHarness exit category: $status\nDisposable cleanup: attempted\nNo credentials, payloads, or response bodies are retained."
+    write_result status.json "{\"v1_b2_status\":\"NOT_MEASURED\",\"harness_exit_code\":$status,\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service\":\"$FAILED_SERVICE\",\"elapsed_seconds\":\"$FAILED_ELAPSED_SECONDS\",\"cleanup\":\"$cleanup_status\"}"
+    write_operator_summary "$status" "$cleanup_status"
   fi
   trap - EXIT
   exit "$status"
@@ -118,11 +146,18 @@ assert_host_safety() {
 }
 
 wait_http() {
-  local url="$1" deadline=$((SECONDS + 120))
-  until curl --fail --silent --show-error --max-time 3 "$url" >/dev/null; do
-    (( SECONDS < deadline )) || fail "timed out waiting for bounded local service readiness"
+  local service="$1" url="$2" expected_service="$3" started="$SECONDS" deadline=$((SECONDS + 120)) response=""
+  while (( SECONDS < deadline )); do
+    # Startup connection refusals, resets, and empty replies are transient.
+    # Response content remains only in this shell variable for the bounded
+    # status check and is never printed or written to an artifact.
+    if response=$(curl --silent --show-error --connect-timeout 2 --max-time 5 "$url" 2>/dev/null) \
+      && [[ "$response" == *'"status":"ok"'* && "$response" == *"\"service\":\"$expected_service\""* ]]; then
+      return 0
+    fi
     sleep 2
   done
+  record_readiness_timeout "$service" "$((SECONDS - started))"
 }
 
 write_runtime() {
@@ -163,8 +198,8 @@ start_core() {
   docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml build api
   docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml build frontend
   docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml up -d postgres redis migrate api frontend
-  wait_http "$API_ORIGIN/api/v1/health"
-  wait_http "$FRONTEND_ORIGIN/healthz"
+  wait_http "api" "$API_ORIGIN/api/v1/health" "Aegis AI"
+  wait_http "frontend" "$FRONTEND_ORIGIN/healthz" "frontend"
   # Bootstrap does not receive plaintext on its command line. Preserve only
   # its bounded process result in the harness log so a failed disposable run
   # is diagnosable without exposing the mounted secret value.
