@@ -1,113 +1,29 @@
-# Aegis AI — Phase 1 (Foundations)
+# Aegis AI
 
-AI-Powered Security Decision Engine. This phase ships the monorepo scaffolding,
-database schema, authentication, and RBAC that every later module (Investigations,
-AI Reasoning, Attack Graph, Reporting, …) builds on top of.
+A self-hosted security alert intelligence and investigation platform, validated end-to-end with Wazuh and suitable for controlled pilot use.
 
-See `AEGIS_AI_ARCHITECTURE.md` and `AEGIS_AI_UIUX_SPEC.md` (shared earlier in this
-build) for the full system design this scaffolding implements.
+## Release-candidate scope
 
-## What's in Phase 1
+The current candidate is `v1.0.0-rc1`. Its verified path is:
 
-- **Monorepo**: `backend/` (FastAPI, clean architecture) + `frontend/` (Next.js/TS)
-- **Database schema**: organizations, users, roles, permissions, role-permission
-  mapping, revoked-token list — via Alembic migration `0001`
-- **Authentication**: JWT access (30 min) + refresh (7 day, rotated on use,
-  individually revocable) token pairs
-- **RBAC**: five baseline roles (`soc_analyst`, `incident_responder`,
-  `security_architect`, `ciso`, `admin`), each mapped to a fixed permission set
-  seeded on startup
-- **Backend foundation**: DI-based FastAPI app, repository + service layers,
-  centralized exception handling, auto-generated OpenAPI docs
-- **Frontend foundation**: Next.js App Router, Tailwind theme matching the design
-  system, auth context with silent token refresh, sidebar/topbar shell, login flow
+`Wazuh → durable forwarder → authenticated webhook → RawEvent → CanonicalAlert → deduplication → correlation-v2 → triage-v1 → analyst promotion → Investigation → reconstruction → grounded AI claim → typed citation → analyst review`.
 
-## Quick start
+AI output is reviewable and citation-linked, never automatically authoritative. Findings, MITRE mappings, promotions, and actions remain separately analyst controlled.
 
-```bash
-cp .env.example .env
-# edit .env if you want non-default ports/credentials — the defaults work as-is
+## Not a claim
 
-docker compose up --build
-```
+Aegis AI is not an Enterprise SIEM replacement, SaaS platform, compliance-certified product, supported Splunk/Sentinel/Elastic integration, or autonomous SOC. Wazuh 4.9.2 is the only end-to-end validated integration.
 
-- Frontend: http://localhost:3000 (redirects to `/login`)
-- Backend API docs: http://localhost:8000/api/docs
-- Demo login: `admin@aegis.demo` / `ChangeMe123!` (seeded automatically on first boot)
+## Controlled-pilot deployment
 
-The backend entrypoint waits for Postgres, runs migrations, seeds baseline
-roles/permissions/demo org/admin user, then starts the API — `docker compose up`
-alone gets you to a working login on a clean checkout.
+Production Compose—not `docker-compose.yml`—is authoritative for pilots. Development Compose and `.env.example` are development-only conveniences. Start with [Deployment quickstart](docs/release/DEPLOYMENT_QUICKSTART.md), then follow [Production deployment](docs/release/PRODUCTION_DEPLOYMENT.md), [Admin bootstrap](docs/release/PRODUCTION_ADMIN_BOOTSTRAP.md), [Wazuh operations](docs/release/WAZUH_OPERATIONS.md), and [Backup and recovery](docs/release/BACKUP_AND_RECOVERY.md).
 
-## Repo layout
+Production secrets are file-mounted. Intelligence execution is optional and disabled by default; deliberate local Ollama enablement uses the pinned runtime/model described in [Image inventory](docs/release/PRODUCTION_IMAGE_INVENTORY.md).
 
-```
-aegis-ai/
-  backend/
-    app/
-      core/            # config, JWT security primitives, logging
-      shared/           # DB session, declarative Base + mixins, exception hierarchy
-      modules/
-        identity/       # auth, users, roles, permissions — the only module built so far
-          domain/        # service layer (business logic)
-          infrastructure/# SQLAlchemy models + repositories
-          api/            # FastAPI router, schemas, RBAC dependencies
-      seed/             # idempotent baseline data seeding
-    alembic/            # migrations
-    tests/              # pytest — unit (security) + integration (auth API)
-  frontend/
-    app/
-      login/
-      (dashboard)/      # authenticated route group — sidebar + topbar shell
-    components/
-      ui/               # Button, Input, Card primitives
-      layout/           # Sidebar, Topbar
-    lib/
-      api-client.ts     # fetch wrapper with silent 401 → refresh → retry
-      auth-context.tsx  # login/logout/current-user React context
-  docker-compose.yml
-  .env.example
-```
+## Capabilities and boundaries
 
-Every later module (`investigations`, `ai_reasoning`, `attack_graph`, `reporting`, …)
-follows the exact same `domain/infrastructure/api` shape as `identity` — that
-consistency is what the architecture doc means by "every module must be
-independent."
+- Organization-scoped RBAC, bounded canonical evidence provenance, replay/deduplication, version-isolated correlation-v2, triage, and explicit promotion.
+- Investigation workspaces for factual evidence, timeline, entities, indicators, relationships, audit, notes, reports, reconstruction, and analyst review.
+- Wazuh durable spool/retry/quarantine and TLS-verified forwarding.
 
-## Design decisions worth knowing about
-
-- **Token strategy**: access tokens are short-lived and carry the caller's
-  flattened permission list, so most requests authorize with zero DB round
-  trips. Refresh tokens are rotated on every use and individually revocable via
-  the `revoked_tokens` table (logout invalidates that specific session, not
-  every session).
-- **RBAC is enforced at the API layer**, not just hidden in the UI — every
-  sensitive backend endpoint requires a specific permission or role via FastAPI
-  `Depends`, so hiding a button client-side is a UX nicety, not a security
-  boundary.
-- **Multi-tenancy** is `org_id`-scoped at the application layer for now
-  (every repository method takes/filters by `org_id`). Postgres row-level
-  security policies are a documented hardening step once the schema has
-  settled across more modules, not a Phase 1 requirement.
-- **Frontend auth storage**: tokens live in `localStorage`, not cookies, so
-  `middleware.ts` is honestly a no-op placeholder — real route protection
-  happens client-side via `AuthProvider` once `/auth/me` resolves. If this
-  later moves to httpOnly cookie sessions (recommended before a real
-  production launch, since httpOnly cookies aren't readable by XSS), that
-  file is where server-side verification would go.
-- **No connector modules exist yet, by design** — Phase 1 has nothing for
-  Sentinel/Splunk/Elastic/CrowdStrike/cloud APIs to plug into. That's correct:
-  those arrive as the `connectors` module in the MVP build, and per the
-  architecture doc, each will be a swappable adapter behind a common interface.
-
-## Running tests
-
-```bash
-docker compose exec backend pytest
-```
-
-## What's next
-
-Per the agreed MVP scope: Investigations module (the core case object) and its
-dashboard/workspace UI, using mock security event data — no external SIEM/EDR/cloud
-integrations until v2.
+See [release scope](docs/release/V1_0_RELEASE.md), [changelog](CHANGELOG.md), [security policy](SECURITY.md), [license](LICENSE), [notice](NOTICE), [launch drafts](docs/release/LAUNCH_POSTS.md), and [RC1 certification](docs/release/RC1_B_LIVE_CERTIFICATION.md). Final v1.0.0 remains contingent on V1-B2 bounded pilot performance evidence.

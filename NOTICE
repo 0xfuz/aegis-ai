@@ -1,0 +1,7 @@
+Copyright 2026 0x0MAr
+
+Apache-2.0 applies to original Aegis AI repository code only. Third-party
+dependencies, container images, Wazuh, Redis, PostgreSQL, Next.js, FastAPI,
+Celery, Ollama, and model artifacts retain their own licenses and terms. See
+docs/release/PRODUCTION_IMAGE_INVENTORY.md. This NOTICE does not reproduce
+third-party license texts.
