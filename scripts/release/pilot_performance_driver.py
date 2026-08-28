@@ -29,12 +29,31 @@ class State:
     last_completed_scenario: str = ""
     requested_requests: int = 0
     completed_requests: int = 0
+    current_counts: dict | None = None
+    completed_scenarios: list[dict] | None = None
 
     def begin(self, scenario: str) -> None:
         self.current_scenario = scenario
+        self.current_counts = {"requested": 0, "submitted": 0, "completed": 0, "accepted": 0, "failed": 0, "pending_at_deadline": 0}
+        if self.completed_scenarios is None:
+            self.completed_scenarios = []
 
     def complete(self) -> None:
         self.last_completed_scenario = self.current_scenario
+
+    def requested(self) -> None:
+        self.requested_requests += 1
+        if self.current_counts is not None:
+            self.current_counts["requested"] += 1
+
+    def completed(self, status: int | None = None) -> None:
+        self.completed_requests += 1
+        if self.current_counts is not None:
+            self.current_counts["completed"] += 1
+            if status is not None and 200 <= status < 300:
+                self.current_counts["accepted"] += 1
+            elif status is not None:
+                self.current_counts["failed"] += 1
 
 
 def _read_secret(path: str) -> str:
@@ -64,9 +83,9 @@ def _request(url: str, *, category: str, operation: str, method: str = "GET", pa
 
 
 def _call(state: State, url: str, *, category: str, operation: str, **kwargs) -> tuple[int, bytes]:
-    state.requested_requests += 1
+    state.requested()
     result = _request(url, category=category, operation=operation, **kwargs)
-    state.completed_requests += 1
+    state.completed(result[0])
     return result
 
 
@@ -136,10 +155,17 @@ def _result(future: concurrent.futures.Future, deadline: float, operation: str):
 def _send_scenario(api: str, token: str, *, name: str, events: int, rate: int, concurrency: int, timeout: int, state: State) -> dict:
     state.begin(name)
     connectors = [_connector(api, token, f"{name}-{i}", state) for i in range(max(1, (events + 59) // 60))]
-    started, deadline, statuses, latencies = time.monotonic(), time.monotonic() + timeout, Counter(), []
+    started, statuses, latencies = time.monotonic(), Counter(), []
+    # The bounded drain deadline starts at the final scheduled submission:
+    # emission window + existing 15s request timeout + 2s orchestration slack,
+    # never beyond the certified scenario bound.
+    emission_window = max(0, events - 1) / rate
+    deadline = min(started + timeout, started + emission_window + 15 + 2)
     def send(index: int) -> tuple[int, float]:
         connector_id, secret = connectors[index % len(connectors)]
         tick = time.monotonic()
+        assert state.current_counts is not None
+        state.current_counts["submitted"] += 1
         status, _ = _call(state, f"{api}/ingest/wazuh/v1/{connector_id}", category="INGEST_REQUEST_TIMEOUT", operation="wazuh_ingestion", method="POST", payload=_payload(name, index), secret=secret)
         return status, (time.monotonic() - tick) * 1000
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
@@ -149,11 +175,25 @@ def _send_scenario(api: str, token: str, *, name: str, events: int, rate: int, c
             while time.monotonic() < due:
                 time.sleep(min(.01, due - time.monotonic(), _remaining(deadline, "rate_scheduling")))
             futures.append(pool.submit(send, index))
-        for future in futures:
-            status, latency = _result(future, deadline, "ingestion_future")
+        done, pending = concurrent.futures.wait(futures, timeout=_remaining(deadline, "ingestion_future"))
+        for future in done:
+            status, latency = future.result()
             statuses[status] += 1; latencies.append(latency)
+        assert state.current_counts is not None
+        state.current_counts["pending_at_deadline"] = len(pending)
+        if pending:
+            # Reconcile every Future that crossed the deadline before deciding
+            # it is genuinely pending; never label a completed Future timed out.
+            reconciled = [future for future in pending if future.done()]
+            for future in reconciled:
+                pending.remove(future)
+                status, latency = future.result()
+                statuses[status] += 1; latencies.append(latency)
+            state.current_counts["pending_at_deadline"] = len(pending)
+            if pending:
+                raise DriverFailure("FUTURE_COMPLETION_TIMEOUT", "ingestion_future")
     elapsed = time.monotonic() - started; state.complete()
-    return {"scenario": name, "events": events, "accepted": sum(v for k, v in statuses.items() if 200 <= k < 300), "rejected": sum(v for k, v in statuses.items() if 400 <= k < 500), "server_errors": sum(v for k, v in statuses.items() if k >= 500), "p50_ms": _percentile(latencies, .5), "p95_ms": _percentile(latencies, .95), "p99_ms": _percentile(latencies, .99), "duration_seconds": round(elapsed, 2), "throughput_events_per_second": round(events / elapsed, 2)}
+    return {"scenario": name, "events": events, **state.current_counts, "accepted": sum(v for k, v in statuses.items() if 200 <= k < 300), "rejected": sum(v for k, v in statuses.items() if 400 <= k < 500), "server_errors": sum(v for k, v in statuses.items() if k >= 500), "p50_ms": _percentile(latencies, .5), "p95_ms": _percentile(latencies, .95), "p99_ms": _percentile(latencies, .99), "duration_seconds": round(elapsed, 2), "throughput_events_per_second": round(events / elapsed, 2)}
 
 
 def _read_scenario(api: str, token: str, concurrency: int, timeout: int, state: State) -> dict:
@@ -193,7 +233,7 @@ def _write_status(path: str, state: State, category: str = "", operation: str = 
     target = Path(path)
     if target.is_symlink():
         raise DriverFailure("DRIVER_STATUS_PATH_INVALID", "status_persistence")
-    value = {"aggregate_only": True, "current_scenario": state.current_scenario, "last_completed_scenario": state.last_completed_scenario, "failed_scenario": state.current_scenario if category else "", "safe_failure_category": category, "service_or_operation": operation, "completed_requests": state.completed_requests, "requested_requests": state.requested_requests, "elapsed_seconds": round(time.monotonic() - state.started, 2), "measurement_started": True}
+    value = {"aggregate_only": True, "current_scenario": state.current_scenario, "last_completed_scenario": state.last_completed_scenario, "failed_scenario": state.current_scenario if category else "", "safe_failure_category": category, "service_or_operation": operation, "completed_requests": state.completed_requests, "requested_requests": state.requested_requests, "scenario_counts": state.current_counts or {}, "completed_scenarios": state.completed_scenarios or [], "elapsed_seconds": round(time.monotonic() - state.started, 2), "measurement_started": True}
     temporary = target.with_name(f".{target.name}.{os.getpid()}")
     temporary.write_text(json.dumps(value, separators=(",", ":")) + "\n", encoding="utf-8")
     os.chmod(temporary, 0o600); os.replace(temporary, target)
@@ -212,7 +252,15 @@ def main(argv: list[str] | None = None) -> int:
     state = State(time.monotonic())
     try:
         token = _login_and_rotate(args.api, _read_secret(args.email_file), _read_secret(args.initial_password_file), _read_secret(args.rotated_password_file), state); state.complete()
-        results = [_smoke(args.api, token, state)] if args.smoke_only else [_send_scenario(args.api, token, name="ingestion_baseline", events=args.baseline_events, rate=args.baseline_rate, concurrency=args.baseline_concurrency, timeout=args.baseline_timeout, state=state), _send_scenario(args.api, token, name="controlled_burst", events=args.burst_events, rate=args.burst_rate, concurrency=args.burst_concurrency, timeout=args.burst_timeout, state=state), _read_scenario(args.api, token, args.read_concurrency, args.read_timeout, state)]
+        if args.smoke_only:
+            results = [_smoke(args.api, token, state)]
+        else:
+            results = []
+            for scenario in (("ingestion_baseline", args.baseline_events, args.baseline_rate, args.baseline_concurrency, args.baseline_timeout), ("controlled_burst", args.burst_events, args.burst_rate, args.burst_concurrency, args.burst_timeout)):
+                result = _send_scenario(args.api, token, name=scenario[0], events=scenario[1], rate=scenario[2], concurrency=scenario[3], timeout=scenario[4], state=state)
+                results.append(result); state.completed_scenarios.append(result)
+            result = _read_scenario(args.api, token, args.read_concurrency, args.read_timeout, state=state)
+            results.append(result); state.completed_scenarios.append(result)
     except DriverFailure as failure:
         _write_status(args.status_file, state, failure.category, failure.operation); return 2
     except TimeoutError:

@@ -39,6 +39,26 @@ def test_future_timeout_and_partial_counts_remain_safe(tmp_path):
     assert {"token", "password", "body", "url", "header"}.isdisjoint(recorded)
 
 
+def test_completed_futures_are_reconciled_and_pending_counts_remain_distinct(monkeypatch):
+    state = driver.State(time.monotonic())
+    monkeypatch.setattr(driver, "_connector", lambda *_args: ("bounded", "secret"))
+    monkeypatch.setattr(driver, "_request", lambda *_args, **_kwargs: (200, b""))
+    result = driver._send_scenario("http://127.0.0.1:18100/api/v1", "token", name="controlled_burst", events=2, rate=10, concurrency=1, timeout=90, state=state)
+    assert result["requested"] == result["submitted"] == result["completed"] == 2
+    assert result["pending_at_deadline"] == 0 and result["accepted"] == 2
+    assert state.last_completed_scenario == "controlled_burst"
+
+
+def test_genuinely_pending_future_is_classified_with_pending_count(monkeypatch):
+    state = driver.State(time.monotonic())
+    monkeypatch.setattr(driver, "_connector", lambda *_args: ("bounded", "secret"))
+    monkeypatch.setattr(driver, "_remaining", lambda *_args: 0.0001)
+    monkeypatch.setattr(driver, "_request", lambda *_args, **_kwargs: (time.sleep(0.02), (200, b""))[1])
+    with pytest.raises(driver.DriverFailure, match="FUTURE_COMPLETION_TIMEOUT"):
+        driver._send_scenario("http://127.0.0.1:18100/api/v1", "token", name="controlled_burst", events=1, rate=1, concurrency=1, timeout=90, state=state)
+    assert state.current_counts["pending_at_deadline"] == 1
+
+
 def test_driver_stops_before_later_scenarios_when_authentication_times_out(monkeypatch, tmp_path):
     status = tmp_path / "driver-status.json"
     for name in ("email", "initial", "rotated"):
@@ -56,7 +76,7 @@ def test_smoke_mode_is_one_ingestion_and_one_bounded_read_only():
     source = (ROOT / "scripts/release/pilot_performance_driver.py").read_text(encoding="utf-8")
     harness = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
     assert 'parser.add_argument("--smoke-only", action="store_true")' in source
-    assert 'results = [_smoke(args.api, token, state)] if args.smoke_only' in source
+    assert 'results = [_smoke(args.api, token, state)]' in source and 'if args.smoke_only:' in source
     assert '"scenario": "measurement_smoke", "requests": 2' in source
     assert '--smoke-only) SMOKE_ONLY=true' in harness
     assert 'PROJECT="aegis-v1b2-smoke-pilot"' in harness

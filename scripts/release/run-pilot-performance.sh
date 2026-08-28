@@ -334,7 +334,7 @@ measure() {
   else
     local driver_exit=$? driver_fields
     driver_fields=$(python3 -c 'import json, sys; p=json.load(open(sys.argv[1])); allowed=("current_scenario","last_completed_scenario","failed_scenario","safe_failure_category","service_or_operation","completed_requests","requested_requests"); vals=[str(p.get(k, "")) for k in allowed]; assert all(v.replace("_", "").replace("-", "").isalnum() or v == "" for v in vals[:5]); assert all(v.isdigit() for v in vals[5:]); print("|".join(vals))' "$driver_status" 2>/dev/null) || driver_fields=""
-    rm -f -- "$driver_status" "$aggregate_tmp"
+    rm -f -- "$aggregate_tmp"
     SMOKE_STATUS=$([[ "$SMOKE_ONLY" == true ]] && printf '%s' "SMOKE_FAIL" || printf '%s' "NOT_REQUESTED")
     if [[ -n "$driver_fields" ]]; then
       IFS='|' read -r DRIVER_CURRENT_SCENARIO DRIVER_LAST_COMPLETED_SCENARIO DRIVER_FAILED_SCENARIO SAFE_FAILURE_CATEGORY FAILED_SERVICE DRIVER_COMPLETED_REQUESTS DRIVER_REQUESTED_REQUESTS <<<"$driver_fields"
@@ -342,6 +342,9 @@ measure() {
       FAILED_ELAPSED_SECONDS="$((SECONDS - RUN_STARTED_SECONDS))"
     else
       set_safe_failure "DRIVER_STATUS_UNAVAILABLE" "measurement" "pilot_performance_driver"
+    fi
+    if [[ -f "$driver_status" && ! -L "$driver_status" ]]; then
+      mv -f -- "$driver_status" "$RESULT_DIR/aggregate.json"
     fi
     return "$driver_exit"
   fi
