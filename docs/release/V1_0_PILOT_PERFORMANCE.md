@@ -1,6 +1,25 @@
 # V1.0 controlled-pilot performance acceptance
 
-## V1-B2 STATUS: NOT MEASURED
+## V1-B2 STATUS: BLOCKED
+
+Measured on branch `release-readiness` at commit `af3f683`, the original
+single-machine ingestion baseline did not complete: 300 target events at 5
+events/second, concurrency ≤5. This host therefore does **not** certify 5
+events/second, and no smaller sustained pilot rate or supported throughput
+envelope has been measured.
+
+The aggregate-only record reports 300 Futures scheduled; 211 HTTP starts; 206
+returned and accepted requests; zero rejected/failed returned requests; 89
+Futures cancelled before HTTP submission; and five requests still running at
+the deadline. Cleanup completed. This is a bounded local capacity-gate failure,
+not evidence of lost submitted events, HTTP 5xx, or a product defect. No
+p50/p95/p99 result is reported because the workload was incomplete.
+
+The controlled burst, bounded read-path suite, forwarder recovery, restart
+validation, and complete resource-envelope certification are **NOT RUN** after
+this blocker. RC1 remains available only for controlled functional evaluation;
+V1-C and promotion to v1.0.0 remain blocked. No raw payloads, responses,
+credentials, or logs were retained.
 
 This is an operator-run harness checkpoint, not a performance claim. Run it
 from the repository root in a normal local terminal:

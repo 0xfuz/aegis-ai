@@ -119,4 +119,4 @@ def test_pilot_report_declares_the_fixed_limits_and_non_production_boundary():
     for phrase in ("300 distinct events at 5 events/s", "150 distinct events at 10 events/s", "25 synthetic local deliveries", "not a\nproduction, Enterprise", "15 GiB", "2 GiB"):
         assert phrase in text
     assert "not populated until the harness has run exactly\nonce" in text
-    assert "V1-B2 STATUS: NOT MEASURED" in text
+    assert "V1-B2 STATUS: BLOCKED" in text
