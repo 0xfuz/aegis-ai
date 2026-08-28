@@ -44,8 +44,8 @@ def test_completed_futures_are_reconciled_and_pending_counts_remain_distinct(mon
     monkeypatch.setattr(driver, "_connector", lambda *_args: ("bounded", "secret"))
     monkeypatch.setattr(driver, "_request", lambda *_args, **_kwargs: (200, b""))
     result = driver._send_scenario("http://127.0.0.1:18100/api/v1", "token", name="controlled_burst", events=2, rate=10, concurrency=1, timeout=90, state=state)
-    assert result["requested"] == result["submitted"] == result["completed"] == 2
-    assert result["pending_at_deadline"] == 0 and result["accepted"] == 2
+    assert result["target_events"] == result["futures_scheduled"] == result["http_started"] == result["http_returned"] == 2
+    assert result["running_at_deadline"] == result["queued_at_deadline"] == 0 and result["accepted"] == 2
     assert state.last_completed_scenario == "controlled_burst"
 
 
@@ -56,7 +56,7 @@ def test_genuinely_pending_future_is_classified_with_pending_count(monkeypatch):
     monkeypatch.setattr(driver, "_request", lambda *_args, **_kwargs: (time.sleep(0.02), (200, b""))[1])
     with pytest.raises(driver.DriverFailure, match="FUTURE_COMPLETION_TIMEOUT"):
         driver._send_scenario("http://127.0.0.1:18100/api/v1", "token", name="controlled_burst", events=1, rate=1, concurrency=1, timeout=90, state=state)
-    assert state.current_counts["pending_at_deadline"] == 1
+    assert state.current_counts["running_at_deadline"] + state.current_counts["queued_at_deadline"] == 1
 
 
 def test_driver_stops_before_later_scenarios_when_authentication_times_out(monkeypatch, tmp_path):

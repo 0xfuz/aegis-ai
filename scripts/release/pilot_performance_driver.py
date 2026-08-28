@@ -7,6 +7,7 @@ import concurrent.futures
 import json
 import os
 import socket
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -153,34 +154,42 @@ def _result(future: concurrent.futures.Future, deadline: float, operation: str):
 
 
 def _send_scenario(api: str, token: str, *, name: str, events: int, rate: int, concurrency: int, timeout: int, state: State) -> dict:
-    state.begin(name)
     connectors = [_connector(api, token, f"{name}-{i}", state) for i in range(max(1, (events + 59) // 60))]
+    # Connector/auth traffic is run-global setup, never event accounting.
+    state.begin(name)
     started, statuses, latencies = time.monotonic(), Counter(), []
     # The bounded drain deadline starts at the final scheduled submission:
     # emission window + existing 15s request timeout + 2s orchestration slack,
     # never beyond the certified scenario bound.
     emission_window = max(0, events - 1) / rate
     deadline = min(started + timeout, started + emission_window + 15 + 2)
+    counts = {"target_events": events, "futures_scheduled": 0, "http_started": 0, "http_returned": 0, "accepted": 0, "rejected_or_failed": 0, "cancelled_before_start": 0, "running_at_deadline": 0, "queued_at_deadline": 0, "late_completed_after_deadline": 0}
+    counts_lock = threading.Lock()
+    frozen = threading.Event()
     def send(index: int) -> tuple[int, float]:
         connector_id, secret = connectors[index % len(connectors)]
         tick = time.monotonic()
-        assert state.current_counts is not None
-        state.current_counts["submitted"] += 1
+        with counts_lock: counts["http_started"] += 1
         status, _ = _call(state, f"{api}/ingest/wazuh/v1/{connector_id}", category="INGEST_REQUEST_TIMEOUT", operation="wazuh_ingestion", method="POST", payload=_payload(name, index), secret=secret)
+        with counts_lock:
+            if frozen.is_set(): counts["late_completed_after_deadline"] += 1
+            else:
+                counts["http_returned"] += 1
+                counts["accepted" if 200 <= status < 300 else "rejected_or_failed"] += 1
         return status, (time.monotonic() - tick) * 1000
-    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=concurrency)
+    try:
         futures = []
         for index in range(events):
             due = started + index / rate
             while time.monotonic() < due:
                 time.sleep(min(.01, due - time.monotonic(), _remaining(deadline, "rate_scheduling")))
-            futures.append(pool.submit(send, index))
+            futures.append(pool.submit(send, index)); counts["futures_scheduled"] += 1
         done, pending = concurrent.futures.wait(futures, timeout=_remaining(deadline, "ingestion_future"))
         for future in done:
             status, latency = future.result()
             statuses[status] += 1; latencies.append(latency)
-        assert state.current_counts is not None
-        state.current_counts["pending_at_deadline"] = len(pending)
+        frozen.set()
         if pending:
             # Reconcile every Future that crossed the deadline before deciding
             # it is genuinely pending; never label a completed Future timed out.
@@ -189,11 +198,19 @@ def _send_scenario(api: str, token: str, *, name: str, events: int, rate: int, c
                 pending.remove(future)
                 status, latency = future.result()
                 statuses[status] += 1; latencies.append(latency)
-            state.current_counts["pending_at_deadline"] = len(pending)
             if pending:
+                counts["running_at_deadline"] = sum(item.running() for item in pending)
+                counts["queued_at_deadline"] = len(pending) - counts["running_at_deadline"]
+                counts["cancelled_before_start"] = sum(item.cancel() for item in pending if not item.running())
+                state.current_counts = dict(counts)
                 raise DriverFailure("FUTURE_COMPLETION_TIMEOUT", "ingestion_future")
+    finally:
+        # Never let context-manager shutdown turn a bounded deadline into an
+        # unbounded hidden wait. In-flight HTTP calls retain their own 15s cap.
+        pool.shutdown(wait=False, cancel_futures=True)
     elapsed = time.monotonic() - started; state.complete()
-    return {"scenario": name, "events": events, **state.current_counts, "accepted": sum(v for k, v in statuses.items() if 200 <= k < 300), "rejected": sum(v for k, v in statuses.items() if 400 <= k < 500), "server_errors": sum(v for k, v in statuses.items() if k >= 500), "p50_ms": _percentile(latencies, .5), "p95_ms": _percentile(latencies, .95), "p99_ms": _percentile(latencies, .99), "duration_seconds": round(elapsed, 2), "throughput_events_per_second": round(events / elapsed, 2)}
+    state.current_counts = dict(counts)
+    return {"scenario": name, **counts, "p50_ms": _percentile(latencies, .5), "p95_ms": _percentile(latencies, .95), "p99_ms": _percentile(latencies, .99), "duration_seconds": round(elapsed, 2), "achieved_accepted_rate": round(counts["accepted"] / elapsed, 2), "target_met": counts["accepted"] == events and counts["futures_scheduled"] == events, "invariants_valid": counts["accepted"] + counts["rejected_or_failed"] <= counts["http_returned"] <= counts["http_started"] <= counts["futures_scheduled"]}
 
 
 def _read_scenario(api: str, token: str, concurrency: int, timeout: int, state: State) -> dict:
@@ -244,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     for option in ("api", "email-file", "initial-password-file", "rotated-password-file", "status-file"):
         parser.add_argument(f"--{option}", required=True)
     parser.add_argument("--smoke-only", action="store_true")
+    parser.add_argument("--baseline-only", action="store_true")
     for name, default in (("baseline-events", 300), ("baseline-rate", 5), ("baseline-concurrency", 5), ("baseline-timeout", 180), ("burst-events", 150), ("burst-rate", 10), ("burst-concurrency", 10), ("burst-timeout", 90), ("read-concurrency", 10), ("read-timeout", 180), ("forwarder-events", 25), ("forwarder-timeout", 180)):
         parser.add_argument(f"--{name}", type=int, default=default)
     args = parser.parse_args(argv)
@@ -254,6 +272,9 @@ def main(argv: list[str] | None = None) -> int:
         token = _login_and_rotate(args.api, _read_secret(args.email_file), _read_secret(args.initial_password_file), _read_secret(args.rotated_password_file), state); state.complete()
         if args.smoke_only:
             results = [_smoke(args.api, token, state)]
+        elif args.baseline_only:
+            result = _send_scenario(args.api, token, name="ingestion_baseline", events=args.baseline_events, rate=args.baseline_rate, concurrency=args.baseline_concurrency, timeout=args.baseline_timeout, state=state)
+            results = [result]; state.completed_scenarios.append(result)
         else:
             results = []
             for scenario in (("ingestion_baseline", args.baseline_events, args.baseline_rate, args.baseline_concurrency, args.baseline_timeout), ("controlled_burst", args.burst_events, args.burst_rate, args.burst_concurrency, args.burst_timeout)):

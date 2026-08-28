@@ -23,6 +23,7 @@ RUNTIME_DIR=""
 RESULT_DIR="${AEGIS_V1B2_RESULT_DIR:-}"
 PREFLIGHT_ONLY=false
 SMOKE_ONLY=false
+BASELINE_ONLY=false
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 FAILED_STAGE=""
 SAFE_FAILURE_CATEGORY=""
@@ -85,6 +86,7 @@ parse_args() {
       --result-dir) (($# >= 2)) || fail "--result-dir requires an absolute path"; RESULT_DIR="$2"; shift 2 ;;
       --preflight-only) PREFLIGHT_ONLY=true; shift ;;
       --smoke-only) SMOKE_ONLY=true; shift ;;
+      --baseline-only) BASELINE_ONLY=true; shift ;;
       --help|-h) usage; exit 0 ;;
       *) fail "unsupported argument" ;;
     esac
@@ -319,7 +321,7 @@ measure() {
   # The driver records only aggregate timing/status/count data to stdout. It
   # uses authenticated HTTP and never emits request/response bodies or secrets.
   local aggregate_tmp="$RESULT_DIR/.aggregate.json.$$" driver_status="$RESULT_DIR/.driver-status.json" mode=()
-  if "$SMOKE_ONLY"; then mode=(--smoke-only); fi
+  if "$SMOKE_ONLY"; then mode=(--smoke-only); elif "$BASELINE_ONLY"; then mode=(--baseline-only); fi
   mark_stage "measurement" "pilot_performance_driver"
   MEASUREMENT_STARTED="true"
   write_status "NOT_MEASURED" 0
