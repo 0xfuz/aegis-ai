@@ -220,7 +220,7 @@ write_runtime() {
   head -c 48 /dev/urandom | base64 >"$RUNTIME_DIR/jwt_signing_secret"
   printf '%s\n' 'Pilot-Initial-Password-2!A' >"$RUNTIME_DIR/bootstrap_password"
   printf '%s\n' 'Pilot-Rotated-Password-2!B' >"$RUNTIME_DIR/rotated_password"
-  printf '%s\n' 'pilot-admin@example.invalid' >"$RUNTIME_DIR/admin_email"
+  printf '%s\n' 'pilot-admin@example.com' >"$RUNTIME_DIR/admin_email"
   chmod 600 "$RUNTIME_DIR"/*
   cat >"$RUNTIME_DIR/compose.env" <<EOF
 POSTGRES_USER_REQUIRED=aegis_v1b2
@@ -230,7 +230,7 @@ JWT_SECRET_KEY_FILE_REQUIRED=$RUNTIME_DIR/jwt_signing_secret
 BOOTSTRAP_ADMIN_PASSWORD_FILE=$RUNTIME_DIR/bootstrap_password
 BOOTSTRAP_ORGANIZATION_NAME_REQUIRED=V1 B2 Synthetic Pilot
 BOOTSTRAP_ORGANIZATION_SLUG_REQUIRED=v1b2-synthetic-pilot
-BOOTSTRAP_ADMIN_EMAIL_REQUIRED=pilot-admin@example.invalid
+BOOTSTRAP_ADMIN_EMAIL_REQUIRED=pilot-admin@example.com
 BOOTSTRAP_ADMIN_FULL_NAME_REQUIRED=Pilot Administrator
 CORS_ORIGINS_REQUIRED=$FRONTEND_ORIGIN
 PUBLIC_API_BASE_URL_REQUIRED=$API_ORIGIN
@@ -267,8 +267,14 @@ start_core() {
   # Bootstrap does not receive plaintext on its command line. Preserve only
   # its bounded process result in the harness log so a failed disposable run
   # is diagnosable without exposing the mounted secret value.
-  mark_stage "bootstrap" "admin_bootstrap"
-  docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml --profile bootstrap run --rm admin-bootstrap
+  mark_stage "bootstrap" "administrator_bootstrap"
+  if docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml --profile bootstrap run --rm admin-bootstrap; then
+    :
+  else
+    local bootstrap_status=$?
+    set_safe_failure "BOOTSTRAP_FAILED" "bootstrap" "administrator_bootstrap"
+    return "$bootstrap_status"
+  fi
   mark_stage_completed "bootstrap"
 }
 

@@ -92,6 +92,19 @@ def test_pilot_harness_runs_each_measurement_driver_once_after_both_readiness_ch
     assert frontend_ready < driver
 
 
+def test_pilot_harness_uses_a_valid_synthetic_bootstrap_identity_and_classifies_exit_two():
+    text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    assert "BOOTSTRAP_ADMIN_EMAIL_REQUIRED=pilot-admin@example.com" in text
+    assert "example.invalid" not in text
+    assert 'mark_stage "bootstrap" "administrator_bootstrap"' in text
+    assert '--profile bootstrap run --rm admin-bootstrap' in text
+    assert 'local bootstrap_status=$?' in text
+    assert 'set_safe_failure "BOOTSTRAP_FAILED" "bootstrap" "administrator_bootstrap"' in text
+    assert 'return "$bootstrap_status"' in text
+    assert 'mark_stage_completed "bootstrap"' in text
+    assert text.index('mark_stage_completed "bootstrap"') < text.index('pilot_performance_driver.py')
+
+
 def test_pilot_driver_is_required_and_uses_no_database_path():
     text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
     assert "scripts/release/pilot_performance_driver.py" in text
