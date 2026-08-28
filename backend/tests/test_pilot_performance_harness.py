@@ -10,7 +10,10 @@ def test_pilot_harness_is_bounded_disposable_and_cleans_up():
     assert "set -euo pipefail" in text
     assert "aegis-v1b2-" in text and "project must use the aegis-v1b2-* namespace" in text
     assert "preserved R4 resources are never a harness target" in text
-    assert "trap cleanup EXIT INT TERM" in text
+    assert "trap 'cleanup $?' EXIT" in text
+    assert "trap 'on_err $?' ERR" in text
+    assert "trap 'on_signal INT 130' INT" in text
+    assert "trap 'on_signal TERM 143' TERM" in text
     assert "down --volumes --remove-orphans" in text
     assert "docker system prune" not in text and "docker volume prune" not in text
     assert "--result-dir" in text and "--preflight-only" in text
@@ -40,7 +43,7 @@ def test_readiness_retries_transient_startup_failures_and_requires_both_http_con
     assert 'while (( SECONDS < deadline )); do' in text
     assert '--connect-timeout 2 --max-time 5' in text
     assert 'sleep 2' in text
-    assert 'SAFE_FAILURE_CATEGORY="SERVICE_READINESS_TIMEOUT"' in text
+    assert 'set_safe_failure "SERVICE_READINESS_TIMEOUT" "$CURRENT_STAGE" "$1"' in text
     assert 'wait_http "api" "$API_ORIGIN/api/v1/health" "Aegis AI"' in text
     assert 'wait_http "frontend" "$FRONTEND_ORIGIN/healthz" "frontend"' in text
     assert text.index('wait_http "frontend"') < text.rindex('\n  measure\n}')
@@ -49,11 +52,44 @@ def test_readiness_retries_transient_startup_failures_and_requires_both_http_con
 
 def test_readiness_failure_evidence_and_summary_are_aggregate_only_with_real_newlines():
     text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
-    for key in ('failed_stage', 'safe_failure_category', 'elapsed_seconds', 'cleanup'):
+    for key in ('current_stage', 'last_completed_stage', 'failed_stage', 'safe_failure_category', 'service_or_operation', 'elapsed_seconds', 'measurement_started', 'cleanup'):
         assert key in text
     assert "write_operator_summary" in text
     assert "printf 'V1-B2 STATUS: NOT MEASURED\\nHarness exit category" in text
     assert "curl output" not in text.lower()
+
+
+def test_pilot_harness_persists_safe_stage_state_before_measurement_and_on_failures():
+    text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    assert 'CURRENT_STAGE="initializing"' in text
+    assert 'LAST_COMPLETED_STAGE=""' in text
+    assert 'MEASUREMENT_STARTED="false"' in text
+    assert 'mark_stage "preflight" "repository_and_host_safety"' in text
+    assert 'mark_stage_completed "preflight"' in text
+    assert 'mark_stage "api_readiness" "api"' in text
+    assert 'mark_stage_completed "frontend_readiness"' in text
+    assert 'mark_stage "measurement" "pilot_performance_driver"' in text
+    assert 'MEASUREMENT_STARTED="true"' in text
+    assert text.index('MEASUREMENT_STARTED="true"') < text.index('pilot_performance_driver.py')
+
+
+def test_pilot_harness_classifies_command_and_signal_failures_without_retaining_output():
+    text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    assert 'set_safe_failure "HARNESS_COMMAND_FAILED" "$CURRENT_STAGE" "$CURRENT_OPERATION"' in text
+    assert 'set_safe_failure "HARNESS_INTERRUPTED_${signal}" "$CURRENT_STAGE" "$CURRENT_OPERATION"' in text
+    assert 'set_safe_failure "HARNESS_PRECONDITION_FAILED" "$CURRENT_STAGE" "$CURRENT_OPERATION"' in text
+    assert 'CLEANUP_STATUS="completed"' in text
+    assert 'CLEANUP_STATUS="failed"' in text
+    assert 'write_result exit-code "$status"' in text
+    assert 'response bodies, logs, or environment values are retained' in text
+
+
+def test_pilot_harness_runs_each_measurement_driver_once_after_both_readiness_checks():
+    text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    assert text.count("pilot_performance_driver.py") == 1
+    frontend_ready = text.index('mark_stage_completed "frontend_readiness"')
+    driver = text.index('pilot_performance_driver.py')
+    assert frontend_ready < driver
 
 
 def test_pilot_driver_is_required_and_uses_no_database_path():

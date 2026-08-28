@@ -27,8 +27,27 @@ FAILED_STAGE=""
 SAFE_FAILURE_CATEGORY=""
 FAILED_SERVICE=""
 FAILED_ELAPSED_SECONDS=""
+CURRENT_STAGE="initializing"
+CURRENT_OPERATION="initialization"
+LAST_COMPLETED_STAGE=""
+MEASUREMENT_STARTED="false"
+RUN_STARTED_SECONDS=$SECONDS
+CLEANUP_STATUS="not_required"
 
-fail() { printf '%s\n' "pilot-performance: $*" >&2; exit 2; }
+set_safe_failure() {
+  local category="$1" stage="$2" operation="$3"
+  [[ -n "$SAFE_FAILURE_CATEGORY" ]] && return 0
+  SAFE_FAILURE_CATEGORY="$category"
+  FAILED_STAGE="$stage"
+  FAILED_SERVICE="$operation"
+  FAILED_ELAPSED_SECONDS="$((SECONDS - RUN_STARTED_SECONDS))"
+}
+
+fail() {
+  set_safe_failure "HARNESS_PRECONDITION_FAILED" "$CURRENT_STAGE" "$CURRENT_OPERATION"
+  printf '%s\n' "pilot-performance: $*" >&2
+  exit 2
+}
 
 usage() {
   cat <<'EOF'
@@ -87,11 +106,28 @@ write_result() {
   mv -f -- "$temporary" "$RESULT_DIR/$name"
 }
 
+write_status() {
+  local status="$1" exit_code="$2"
+  write_result status.json "{\"v1_b2_status\":\"$status\",\"harness_exit_code\":$exit_code,\"current_stage\":\"$CURRENT_STAGE\",\"last_completed_stage\":\"$LAST_COMPLETED_STAGE\",\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service_or_operation\":\"$FAILED_SERVICE\",\"elapsed_seconds\":$((SECONDS - RUN_STARTED_SECONDS)),\"measurement_started\":$MEASUREMENT_STARTED,\"cleanup\":\"$CLEANUP_STATUS\"}"
+}
+
+mark_stage() {
+  CURRENT_STAGE="$1"
+  CURRENT_OPERATION="$2"
+  write_status "NOT_MEASURED" 0
+}
+
+mark_stage_completed() {
+  LAST_COMPLETED_STAGE="$1"
+  write_status "NOT_MEASURED" 0
+}
+
 write_operator_summary() {
   local status="$1" cleanup_status="$2" temporary
   temporary="$RESULT_DIR/.operator-summary.txt.$$"
   umask 077
-  printf 'V1-B2 STATUS: NOT MEASURED\nHarness exit category: %s\nCleanup: %s\n' "$status" "$cleanup_status" >"$temporary"
+  printf 'V1-B2 STATUS: NOT MEASURED\nHarness exit category: %s\nCurrent stage: %s\nLast completed stage: %s\nMeasurement started: %s\nCleanup: %s\n' \
+    "$status" "$CURRENT_STAGE" "$LAST_COMPLETED_STAGE" "$MEASUREMENT_STARTED" "$cleanup_status" >"$temporary"
   if [[ -n "$SAFE_FAILURE_CATEGORY" ]]; then
     printf 'Safe failure category: %s\nFailed stage: %s\nService: %s\nElapsed seconds: %s\n' \
       "$SAFE_FAILURE_CATEGORY" "$FAILED_STAGE" "$FAILED_SERVICE" "$FAILED_ELAPSED_SECONDS" >>"$temporary"
@@ -102,33 +138,49 @@ write_operator_summary() {
 }
 
 record_readiness_timeout() {
-  FAILED_STAGE="readiness"
-  SAFE_FAILURE_CATEGORY="SERVICE_READINESS_TIMEOUT"
-  FAILED_SERVICE="$1"
+  set_safe_failure "SERVICE_READINESS_TIMEOUT" "$CURRENT_STAGE" "$1"
   FAILED_ELAPSED_SECONDS="$2"
   fail "SERVICE_READINESS_TIMEOUT"
 }
 
 cleanup() {
-  local status=$?
-  local cleanup_status="not_required"
+  local status="${1:-$?}"
+  trap - EXIT ERR INT TERM
   if [[ -n "${RUNTIME_DIR}" && -d "${RUNTIME_DIR}" ]]; then
     # The generated env/secret files and aggregate-only measurements are
     # disposable; never leave them in the repository or host temp space.
-    docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" \
-      -f docker-compose.production.yml down --volumes --remove-orphans >/dev/null 2>&1 || true
+    if docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" \
+      -f docker-compose.production.yml down --volumes --remove-orphans >/dev/null 2>&1; then
+      CLEANUP_STATUS="completed"
+    else
+      CLEANUP_STATUS="failed"
+    fi
     rm -rf -- "$RUNTIME_DIR"
-    cleanup_status="attempted"
   fi
   if [[ -n "${RESULT_DIR}" && -d "${RESULT_DIR}" ]]; then
     write_result exit-code "$status"
-    write_result status.json "{\"v1_b2_status\":\"NOT_MEASURED\",\"harness_exit_code\":$status,\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service\":\"$FAILED_SERVICE\",\"elapsed_seconds\":\"$FAILED_ELAPSED_SECONDS\",\"cleanup\":\"$cleanup_status\"}"
-    write_operator_summary "$status" "$cleanup_status"
+    write_status "NOT_MEASURED" "$status"
+    write_operator_summary "$status" "$CLEANUP_STATUS"
   fi
-  trap - EXIT
   exit "$status"
 }
-trap cleanup EXIT INT TERM
+
+on_err() {
+  local status="$1"
+  set_safe_failure "HARNESS_COMMAND_FAILED" "$CURRENT_STAGE" "$CURRENT_OPERATION"
+  cleanup "$status"
+}
+
+on_signal() {
+  local signal="$1" status="$2"
+  set_safe_failure "HARNESS_INTERRUPTED_${signal}" "$CURRENT_STAGE" "$CURRENT_OPERATION"
+  cleanup "$status"
+}
+
+trap 'cleanup $?' EXIT
+trap 'on_err $?' ERR
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
 
 assert_disposable_target() {
   [[ "$PROJECT" =~ ^aegis-v1b2-[a-z0-9-]+$ ]] || fail "project must use the aegis-v1b2-* namespace"
@@ -194,22 +246,39 @@ EOF
 
 start_core() {
   # Builds are deliberately serialized to keep the bounded host envelope.
+  mark_stage "build_migrate" "migrate_image_build"
   docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml build migrate
+  mark_stage_completed "build_migrate"
+  mark_stage "build_api" "api_image_build"
   docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml build api
+  mark_stage_completed "build_api"
+  mark_stage "build_frontend" "frontend_image_build"
   docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml build frontend
+  mark_stage_completed "build_frontend"
+  mark_stage "core_startup" "compose_start"
   docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml up -d postgres redis migrate api frontend
+  mark_stage_completed "core_startup"
+  mark_stage "api_readiness" "api"
   wait_http "api" "$API_ORIGIN/api/v1/health" "Aegis AI"
+  mark_stage_completed "api_readiness"
+  mark_stage "frontend_readiness" "frontend"
   wait_http "frontend" "$FRONTEND_ORIGIN/healthz" "frontend"
+  mark_stage_completed "frontend_readiness"
   # Bootstrap does not receive plaintext on its command line. Preserve only
   # its bounded process result in the harness log so a failed disposable run
   # is diagnosable without exposing the mounted secret value.
+  mark_stage "bootstrap" "admin_bootstrap"
   docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml --profile bootstrap run --rm admin-bootstrap
+  mark_stage_completed "bootstrap"
 }
 
 measure() {
   # The driver records only aggregate timing/status/count data to stdout. It
   # uses authenticated HTTP and never emits request/response bodies or secrets.
   local aggregate_tmp="$RESULT_DIR/.aggregate.json.$$"
+  mark_stage "measurement" "pilot_performance_driver"
+  MEASUREMENT_STARTED="true"
+  write_status "NOT_MEASURED" 0
   python3 scripts/release/pilot_performance_driver.py \
     --api "$API_ORIGIN/api/v1" --email-file "$RUNTIME_DIR/admin_email" \
     --initial-password-file "$RUNTIME_DIR/bootstrap_password" --rotated-password-file "$RUNTIME_DIR/rotated_password" \
@@ -218,24 +287,26 @@ measure() {
     --read-concurrency "$READ_CONCURRENCY" --read-timeout "$READ_TIMEOUT" --forwarder-events "$FORWARDER_EVENTS" --forwarder-timeout "$FORWARDER_TIMEOUT" >"$aggregate_tmp"
   chmod 600 "$aggregate_tmp"
   mv -f -- "$aggregate_tmp" "$RESULT_DIR/aggregate.json"
+  mark_stage_completed "measurement"
 }
 
 main() {
   parse_args "$@"
   validate_result_dir
+  mark_stage "preflight" "repository_and_host_safety"
   assert_disposable_target
   assert_host_safety
   write_result aggregate.json "{\"v1_b2_status\":\"NOT_MEASURED\",\"aggregate_only\":true,\"scenarios\":[]}"
-  write_result status.json "{\"v1_b2_status\":\"NOT_MEASURED\",\"stage\":\"preflight\"}"
-  write_result operator-summary.txt "V1-B2 STATUS: NOT MEASURED\nNo benchmark result has been recorded."
   if "$PREFLIGHT_ONLY"; then
     command -v docker >/dev/null || fail "Docker CLI is required"
     docker compose version >/dev/null || fail "Docker Compose v2 is required"
-    write_result status.json "{\"v1_b2_status\":\"NOT_MEASURED\",\"stage\":\"preflight_passed\"}"
-    write_result exit-code "0"
+    mark_stage_completed "preflight"
     return 0
   fi
+  mark_stage_completed "preflight"
+  mark_stage "runtime_setup" "temporary_secret_setup"
   write_runtime
+  mark_stage_completed "runtime_setup"
   start_core
   measure
 }
