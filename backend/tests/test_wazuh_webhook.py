@@ -18,6 +18,7 @@ from app.modules.evidence.infrastructure.models import Entity, EntityRelationshi
 from app.modules.identity.infrastructure.models import Organization
 from app.modules.investigations.infrastructure.models import Finding, Investigation, MitreMapping
 from app.shared.database import SessionLocal
+from tests.support.wazuh_webhook_fixture import create_wazuh_webhook_fixture, post_wazuh_webhook_event
 
 FIXTURES = Path(__file__).parent / "fixtures" / "wazuh"
 
@@ -28,13 +29,13 @@ def db():
     finally: session.rollback(); session.close()
 
 def setup(db):
-    suffix = uuid4().hex; org = Organization(name=f"Wazuh {suffix}", slug=f"wazuh-{suffix}"); db.add(org); db.commit()
-    created = ConnectorService(db).create_webhook_connector(org.id, f"wazuh-{suffix}", "http://testserver"); db.commit()
-    return org, created.connector, created.ingest_secret
+    fixture = create_wazuh_webhook_fixture(db)
+    return fixture.organization, fixture.connector, fixture.ingest_secret
 
 def payload(name): return json.loads((FIXTURES / name).read_text())
 def post(client, connector, secret, body, **kwargs):
-    return client.post(f"/api/v1/ingest/wazuh/v1/{connector.id}", json=body, headers={"X-Ingest-Secret": secret}, **kwargs)
+    from types import SimpleNamespace
+    return post_wazuh_webhook_event(client, SimpleNamespace(connector=connector, ingest_secret=secret), body, **kwargs)
 
 @pytest.mark.parametrize("name", ["windows_authentication.json", "linux_process.json", "network_event.json", "file_integrity.json", "sparse_valid.json"])
 def test_supported_wazuh_fixtures_ingest_to_v2_and_triage(db, name):
