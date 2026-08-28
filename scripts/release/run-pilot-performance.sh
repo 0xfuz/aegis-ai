@@ -22,6 +22,7 @@ FRONTEND_ORIGIN="http://127.0.0.1:${FRONTEND_PORT}"
 RUNTIME_DIR=""
 RESULT_DIR="${AEGIS_V1B2_RESULT_DIR:-}"
 PREFLIGHT_ONLY=false
+SMOKE_ONLY=false
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 FAILED_STAGE=""
 SAFE_FAILURE_CATEGORY=""
@@ -33,6 +34,12 @@ LAST_COMPLETED_STAGE=""
 MEASUREMENT_STARTED="false"
 RUN_STARTED_SECONDS=$SECONDS
 CLEANUP_STATUS="not_required"
+SMOKE_STATUS="NOT_REQUESTED"
+DRIVER_CURRENT_SCENARIO=""
+DRIVER_LAST_COMPLETED_SCENARIO=""
+DRIVER_FAILED_SCENARIO=""
+DRIVER_COMPLETED_REQUESTS="0"
+DRIVER_REQUESTED_REQUESTS="0"
 
 set_safe_failure() {
   local category="$1" stage="$2" operation="$3"
@@ -51,7 +58,7 @@ fail() {
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/release/run-pilot-performance.sh --result-dir /absolute/specific/path [--preflight-only]
+Usage: ./scripts/release/run-pilot-performance.sh --result-dir /absolute/specific/path [--preflight-only|--smoke-only]
 
 Runs the bounded V1-B2 synthetic pilot harness from the repository root.
 Maximum measured workload is approximately 12 minutes plus serialized image
@@ -64,6 +71,11 @@ availability, disk, and memory without building or starting containers.
 Interrupt safely with Ctrl-C; the exact aegis-v1b2-* Compose project is
 removed while aggregate status remains in the requested result directory.
 Verify cleanup with: docker ps -a --filter label=com.docker.compose.project=aegis-v1b2-pilot
+
+--smoke-only uses only the aegis-v1b2-smoke-* namespace and runs one synthetic
+ingestion plus one authenticated bounded read after PostgreSQL, migration, API,
+and internal admin bootstrap. It never starts frontend, worker, beat, Ollama,
+Wazuh, or any baseline, burst, forwarder, restart, or resource-envelope stage.
 EOF
 }
 
@@ -72,6 +84,7 @@ parse_args() {
     case "$1" in
       --result-dir) (($# >= 2)) || fail "--result-dir requires an absolute path"; RESULT_DIR="$2"; shift 2 ;;
       --preflight-only) PREFLIGHT_ONLY=true; shift ;;
+      --smoke-only) SMOKE_ONLY=true; shift ;;
       --help|-h) usage; exit 0 ;;
       *) fail "unsupported argument" ;;
     esac
@@ -108,7 +121,7 @@ write_result() {
 
 write_status() {
   local status="$1" exit_code="$2"
-  write_result status.json "{\"v1_b2_status\":\"$status\",\"harness_exit_code\":$exit_code,\"current_stage\":\"$CURRENT_STAGE\",\"last_completed_stage\":\"$LAST_COMPLETED_STAGE\",\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service_or_operation\":\"$FAILED_SERVICE\",\"elapsed_seconds\":$((SECONDS - RUN_STARTED_SECONDS)),\"measurement_started\":$MEASUREMENT_STARTED,\"cleanup\":\"$CLEANUP_STATUS\"}"
+  write_result status.json "{\"v1_b2_status\":\"$status\",\"smoke_status\":\"$SMOKE_STATUS\",\"harness_exit_code\":$exit_code,\"current_stage\":\"$CURRENT_STAGE\",\"last_completed_stage\":\"$LAST_COMPLETED_STAGE\",\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service_or_operation\":\"$FAILED_SERVICE\",\"elapsed_seconds\":$((SECONDS - RUN_STARTED_SECONDS)),\"measurement_started\":$MEASUREMENT_STARTED,\"current_scenario\":\"$DRIVER_CURRENT_SCENARIO\",\"last_completed_scenario\":\"$DRIVER_LAST_COMPLETED_SCENARIO\",\"failed_scenario\":\"$DRIVER_FAILED_SCENARIO\",\"completed_requests\":$DRIVER_COMPLETED_REQUESTS,\"requested_requests\":$DRIVER_REQUESTED_REQUESTS,\"cleanup\":\"$CLEANUP_STATUS\"}"
 }
 
 mark_stage() {
@@ -278,26 +291,70 @@ start_core() {
   mark_stage_completed "bootstrap"
 }
 
+start_smoke_core() {
+  mark_stage "build_migrate" "migrate_image_build"
+  docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml build migrate
+  mark_stage_completed "build_migrate"
+  mark_stage "build_api" "api_image_build"
+  docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml build api
+  mark_stage_completed "build_api"
+  mark_stage "core_startup" "compose_start"
+  docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml up -d postgres migrate api
+  mark_stage_completed "core_startup"
+  mark_stage "api_readiness" "api"
+  wait_http "api" "$API_ORIGIN/api/v1/health" "Aegis AI"
+  mark_stage_completed "api_readiness"
+  mark_stage "bootstrap" "administrator_bootstrap"
+  if docker compose --project-name "$PROJECT" --env-file "$RUNTIME_DIR/compose.env" -f docker-compose.production.yml --profile bootstrap run --rm admin-bootstrap; then
+    :
+  else
+    local bootstrap_status=$?
+    set_safe_failure "BOOTSTRAP_FAILED" "bootstrap" "administrator_bootstrap"
+    return "$bootstrap_status"
+  fi
+  mark_stage_completed "bootstrap"
+}
+
 measure() {
   # The driver records only aggregate timing/status/count data to stdout. It
   # uses authenticated HTTP and never emits request/response bodies or secrets.
-  local aggregate_tmp="$RESULT_DIR/.aggregate.json.$$"
+  local aggregate_tmp="$RESULT_DIR/.aggregate.json.$$" driver_status="$RESULT_DIR/.driver-status.json" mode=()
+  if "$SMOKE_ONLY"; then mode=(--smoke-only); fi
   mark_stage "measurement" "pilot_performance_driver"
   MEASUREMENT_STARTED="true"
   write_status "NOT_MEASURED" 0
-  python3 scripts/release/pilot_performance_driver.py \
+  if python3 scripts/release/pilot_performance_driver.py \
     --api "$API_ORIGIN/api/v1" --email-file "$RUNTIME_DIR/admin_email" \
     --initial-password-file "$RUNTIME_DIR/bootstrap_password" --rotated-password-file "$RUNTIME_DIR/rotated_password" \
+    --status-file "$driver_status" "${mode[@]}" \
     --baseline-events "$BASELINE_EVENTS" --baseline-rate "$BASELINE_RATE" --baseline-concurrency "$BASELINE_CONCURRENCY" --baseline-timeout "$BASELINE_TIMEOUT" \
     --burst-events "$BURST_EVENTS" --burst-rate "$BURST_RATE" --burst-concurrency "$BURST_CONCURRENCY" --burst-timeout "$BURST_TIMEOUT" \
-    --read-concurrency "$READ_CONCURRENCY" --read-timeout "$READ_TIMEOUT" --forwarder-events "$FORWARDER_EVENTS" --forwarder-timeout "$FORWARDER_TIMEOUT" >"$aggregate_tmp"
+    --read-concurrency "$READ_CONCURRENCY" --read-timeout "$READ_TIMEOUT" --forwarder-events "$FORWARDER_EVENTS" --forwarder-timeout "$FORWARDER_TIMEOUT" >"$aggregate_tmp"; then
+    :
+  else
+    local driver_exit=$? driver_fields
+    driver_fields=$(python3 -c 'import json, sys; p=json.load(open(sys.argv[1])); allowed=("current_scenario","last_completed_scenario","failed_scenario","safe_failure_category","service_or_operation","completed_requests","requested_requests"); vals=[str(p.get(k, "")) for k in allowed]; assert all(v.replace("_", "").replace("-", "").isalnum() or v == "" for v in vals[:5]); assert all(v.isdigit() for v in vals[5:]); print("|".join(vals))' "$driver_status" 2>/dev/null) || driver_fields=""
+    rm -f -- "$driver_status" "$aggregate_tmp"
+    SMOKE_STATUS=$([[ "$SMOKE_ONLY" == true ]] && printf '%s' "SMOKE_FAIL" || printf '%s' "NOT_REQUESTED")
+    if [[ -n "$driver_fields" ]]; then
+      IFS='|' read -r DRIVER_CURRENT_SCENARIO DRIVER_LAST_COMPLETED_SCENARIO DRIVER_FAILED_SCENARIO SAFE_FAILURE_CATEGORY FAILED_SERVICE DRIVER_COMPLETED_REQUESTS DRIVER_REQUESTED_REQUESTS <<<"$driver_fields"
+      FAILED_STAGE="measurement"
+      FAILED_ELAPSED_SECONDS="$((SECONDS - RUN_STARTED_SECONDS))"
+    else
+      set_safe_failure "DRIVER_STATUS_UNAVAILABLE" "measurement" "pilot_performance_driver"
+    fi
+    return "$driver_exit"
+  fi
   chmod 600 "$aggregate_tmp"
   mv -f -- "$aggregate_tmp" "$RESULT_DIR/aggregate.json"
+  rm -f -- "$driver_status"
+  if "$SMOKE_ONLY"; then SMOKE_STATUS="SMOKE_PASS"; fi
   mark_stage_completed "measurement"
 }
 
 main() {
   parse_args "$@"
+  if "$SMOKE_ONLY" && [[ -z "${AEGIS_V1B2_PROJECT:-}" ]]; then PROJECT="aegis-v1b2-smoke-pilot"; fi
   validate_result_dir
   mark_stage "preflight" "repository_and_host_safety"
   assert_disposable_target
@@ -313,7 +370,7 @@ main() {
   mark_stage "runtime_setup" "temporary_secret_setup"
   write_runtime
   mark_stage_completed "runtime_setup"
-  start_core
+  if "$SMOKE_ONLY"; then start_smoke_core; else start_core; fi
   measure
 }
 

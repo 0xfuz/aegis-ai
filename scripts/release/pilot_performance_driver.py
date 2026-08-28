@@ -1,32 +1,48 @@
 #!/usr/bin/env python3
-"""Aggregate-only HTTP driver for the bounded V1-B2 local pilot harness.
-
-This process intentionally retains credentials and response bodies only in
-memory long enough to make the authenticated request.  Its stdout contains
-only scenario aggregates, never identifiers, headers, bodies, or secrets.
-"""
+"""Aggregate-only HTTP driver for the bounded V1-B2 local pilot harness."""
 from __future__ import annotations
 
 import argparse
 import concurrent.futures
 import json
-import statistics
-import sys
+import os
+import socket
 import time
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+class DriverFailure(RuntimeError):
+    def __init__(self, category: str, operation: str):
+        super().__init__(category)
+        self.category, self.operation = category, operation
+
+
+@dataclass
+class State:
+    started: float
+    current_scenario: str = "authentication"
+    last_completed_scenario: str = ""
+    requested_requests: int = 0
+    completed_requests: int = 0
+
+    def begin(self, scenario: str) -> None:
+        self.current_scenario = scenario
+
+    def complete(self) -> None:
+        self.last_completed_scenario = self.current_scenario
+
+
 def _read_secret(path: str) -> str:
     return Path(path).read_text(encoding="utf-8").strip()
 
 
-def _request(url: str, *, method: str = "GET", payload: dict | None = None, token: str | None = None, secret: str | None = None) -> tuple[int, bytes]:
-    headers = {"Accept": "application/json"}
-    data = None
+def _request(url: str, *, category: str, operation: str, method: str = "GET", payload: dict | None = None, token: str | None = None, secret: str | None = None) -> tuple[int, bytes]:
+    headers, data = {"Accept": "application/json"}, None
     if payload is not None:
         data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -34,166 +50,179 @@ def _request(url: str, *, method: str = "GET", payload: dict | None = None, toke
         headers["Authorization"] = f"Bearer {token}"
     if secret:
         headers["X-Ingest-Secret"] = secret
-    request = Request(url, data=data, headers=headers, method=method)
     try:
-        with urlopen(request, timeout=15) as response:  # nosec B310: loopback enforced by the shell harness
+        with urlopen(Request(url, data=data, headers=headers, method=method), timeout=15) as response:  # nosec B310: shell verifies loopback
             return response.status, response.read()
     except HTTPError as error:
         return error.code, error.read(1024)
-    except URLError:
+    except (TimeoutError, socket.timeout) as exc:
+        raise DriverFailure(category, operation) from exc
+    except URLError as error:
+        if isinstance(error.reason, (TimeoutError, socket.timeout)):
+            raise DriverFailure(category, operation) from error
         return 599, b""
 
 
-def _json(status: int, body: bytes) -> dict:
+def _call(state: State, url: str, *, category: str, operation: str, **kwargs) -> tuple[int, bytes]:
+    state.requested_requests += 1
+    result = _request(url, category=category, operation=operation, **kwargs)
+    state.completed_requests += 1
+    return result
+
+
+def _json(status: int, body: bytes, operation: str) -> dict:
     if not 200 <= status < 300:
-        raise RuntimeError(f"safe HTTP category {status}")
-    parsed = json.loads(body)
-    if not isinstance(parsed, dict):
-        raise RuntimeError("unexpected bounded API response")
-    return parsed
+        raise DriverFailure("API_RESPONSE_REJECTED", operation)
+    try:
+        value = json.loads(body)
+    except (TypeError, ValueError) as exc:
+        raise DriverFailure("API_RESPONSE_INVALID", operation) from exc
+    if not isinstance(value, dict):
+        raise DriverFailure("API_RESPONSE_INVALID", operation)
+    return value
 
 
-def _login_and_rotate(api: str, email: str, initial: str, rotated: str) -> str:
-    status, body = _request(f"{api}/auth/login", method="POST", payload={"email": email, "password": initial})
-    response = _json(status, body)
+def _login_and_rotate(api: str, email: str, initial: str, rotated: str, state: State) -> str:
+    status, body = _call(state, f"{api}/auth/login", category="AUTH_REQUEST_TIMEOUT", operation="initial_login", method="POST", payload={"email": email, "password": initial})
+    response = _json(status, body, "initial_login")
     token = response.get("access_token")
     if not isinstance(token, str) or not response.get("password_rotation_required"):
-        raise RuntimeError("bootstrap authentication contract failed")
-    status, _ = _request(f"{api}/auth/password/rotate", method="POST", token=token, payload={"current_password": initial, "new_password": rotated})
+        raise DriverFailure("AUTH_CONTRACT_REJECTED", "initial_login")
+    status, _ = _call(state, f"{api}/auth/password/rotate", category="AUTH_REQUEST_TIMEOUT", operation="password_rotation", method="POST", token=token, payload={"current_password": initial, "new_password": rotated})
     if status != 204:
-        raise RuntimeError(f"safe password-rotation category {status}")
-    status, body = _request(f"{api}/auth/login", method="POST", payload={"email": email, "password": rotated})
-    response = _json(status, body)
+        raise DriverFailure("AUTH_CONTRACT_REJECTED", "password_rotation")
+    status, body = _call(state, f"{api}/auth/login", category="AUTH_REQUEST_TIMEOUT", operation="rotated_login", method="POST", payload={"email": email, "password": rotated})
+    response = _json(status, body, "rotated_login")
     token = response.get("access_token")
     if not isinstance(token, str) or response.get("password_rotation_required"):
-        raise RuntimeError("rotated authentication contract failed")
+        raise DriverFailure("AUTH_CONTRACT_REJECTED", "rotated_login")
     return token
 
 
-def _connector(api: str, token: str, name: str) -> tuple[str, str]:
-    status, body = _request(f"{api}/connectors/webhook", method="POST", token=token, payload={"name": name})
-    response = _json(status, body)
+def _connector(api: str, token: str, name: str, state: State) -> tuple[str, str]:
+    status, body = _call(state, f"{api}/connectors/webhook", category="INGEST_REQUEST_TIMEOUT", operation="connector_creation", method="POST", token=token, payload={"name": name})
+    response = _json(status, body, "connector_creation")
     connector = response.get("connector")
     if not isinstance(connector, dict) or not isinstance(connector.get("id"), str) or not isinstance(response.get("ingest_secret"), str):
-        raise RuntimeError("connector contract failed")
+        raise DriverFailure("INGEST_CONTRACT_REJECTED", "connector_creation")
     return connector["id"], response["ingest_secret"]
 
 
 def _payload(prefix: str, index: int) -> dict:
-    # Synthetic RFC-5737 documentation addresses and test-only identities.
     observed = datetime(2026, 8, 22, tzinfo=timezone.utc) + timedelta(seconds=index)
-    return {
-        "id": f"v1b2-{prefix}-{index:04d}", "timestamp": observed.isoformat().replace("+00:00", "Z"),
-        "rule": {"id": "100500", "level": 3, "description": "Synthetic bounded pilot event", "groups": ["syslog"]},
-        "manager": {"name": "v1b2-manager"},
-        "agent": {"id": f"{index:03d}", "name": f"pilot-host-{index:03d}", "ip": f"198.51.100.{(index % 200) + 1}"},
-        "decoder": {"name": "syslog"},
-        "data": {"process": "pilot-syslog"},
-    }
+    return {"id": f"v1b2-{prefix}-{index:04d}", "timestamp": observed.isoformat().replace("+00:00", "Z"), "rule": {"id": "100500", "level": 3, "description": "Synthetic bounded pilot event", "groups": ["syslog"]}, "manager": {"name": "v1b2-manager"}, "agent": {"id": f"{index:03d}", "name": f"pilot-host-{index:03d}", "ip": f"198.51.100.{(index % 200) + 1}"}, "decoder": {"name": "syslog"}, "data": {"process": "pilot-syslog"}}
 
 
-def _percentile(samples: list[float], percent: float) -> float:
-    if not samples:
-        return 0.0
-    return round(sorted(samples)[max(0, int(len(samples) * percent) - 1)], 2)
+def _percentile(samples: list[float], fraction: float) -> float:
+    return 0.0 if not samples else round(sorted(samples)[max(0, int(len(samples) * fraction) - 1)], 2)
 
 
-def _send_scenario(api: str, token: str, *, name: str, events: int, rate: int, concurrency: int, timeout: int) -> dict:
-    # Connector rate limiting is 60/minute. The fixed connector count keeps
-    # every synthetic delivery within the certified public boundary.
-    connector_count = max(1, (events + 59) // 60)
-    connectors = [_connector(api, token, f"{name}-{i}") for i in range(connector_count)]
-    started = time.monotonic()
-    latencies: list[float] = []
-    statuses: Counter[int] = Counter()
+def _remaining(deadline: float, operation: str) -> float:
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise DriverFailure("SCENARIO_DEADLINE_TIMEOUT", operation)
+    return left
 
+
+def _result(future: concurrent.futures.Future, deadline: float, operation: str):
+    try:
+        return future.result(timeout=_remaining(deadline, operation))
+    except DriverFailure:
+        raise
+    except concurrent.futures.TimeoutError as exc:
+        raise DriverFailure("FUTURE_COMPLETION_TIMEOUT", operation) from exc
+
+
+def _send_scenario(api: str, token: str, *, name: str, events: int, rate: int, concurrency: int, timeout: int, state: State) -> dict:
+    state.begin(name)
+    connectors = [_connector(api, token, f"{name}-{i}", state) for i in range(max(1, (events + 59) // 60))]
+    started, deadline, statuses, latencies = time.monotonic(), time.monotonic() + timeout, Counter(), []
     def send(index: int) -> tuple[int, float]:
-        connector_id, secret = connectors[index % connector_count]
+        connector_id, secret = connectors[index % len(connectors)]
         tick = time.monotonic()
-        status, _ = _request(f"{api}/ingest/wazuh/v1/{connector_id}", method="POST", payload=_payload(name, index), secret=secret)
+        status, _ = _call(state, f"{api}/ingest/wazuh/v1/{connector_id}", category="INGEST_REQUEST_TIMEOUT", operation="wazuh_ingestion", method="POST", payload=_payload(name, index), secret=secret)
         return status, (time.monotonic() - tick) * 1000
-
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = []
         for index in range(events):
-            due = started + (index / rate)
+            due = started + index / rate
             while time.monotonic() < due:
-                time.sleep(min(0.01, due - time.monotonic()))
+                time.sleep(min(.01, due - time.monotonic(), _remaining(deadline, "rate_scheduling")))
             futures.append(pool.submit(send, index))
         for future in futures:
-            status, latency = future.result(timeout=max(1, timeout - int(time.monotonic() - started)))
-            statuses[status] += 1
-            latencies.append(latency)
-    elapsed = time.monotonic() - started
-    if elapsed > timeout:
-        raise RuntimeError(f"{name} exceeded its fixed duration bound")
-    return {
-        "scenario": name, "events": events, "accepted": sum(count for status, count in statuses.items() if 200 <= status < 300),
-        "rejected": sum(count for status, count in statuses.items() if 400 <= status < 500), "server_errors": sum(count for status, count in statuses.items() if status >= 500),
-        "p50_ms": _percentile(latencies, .50), "p95_ms": _percentile(latencies, .95), "p99_ms": _percentile(latencies, .99),
-        "duration_seconds": round(elapsed, 2), "throughput_events_per_second": round(events / elapsed, 2),
-    }
-
-
-def _seed_read_investigation(api: str, token: str) -> str:
-    connector_id, secret = _connector(api, token, "read-seed")
-    payload = {"title": "Synthetic bounded pilot investigation", "severity": "low", "description": "Synthetic benign test record.", "indicators": []}
-    status, body = _request(f"{api}/ingest/webhook/{connector_id}", method="POST", payload=payload, secret=secret)
-    response = _json(status, body)
-    investigation_id = response.get("investigation_id")
-    if not isinstance(investigation_id, str):
-        raise RuntimeError("read seed contract failed")
-    return investigation_id
-
-
-def _read_scenario(api: str, token: str, concurrency: int, timeout: int) -> dict:
-    investigation_id = _seed_read_investigation(api, token)
-    endpoints = [
-        "/investigations/dashboard-summary?window=7d", "/investigations?limit=20&offset=0", "/alert-triage/clusters?limit=20&offset=0",
-        f"/investigations/{investigation_id}/overview", f"/investigations/{investigation_id}/evidence/inventory?limit=20&offset=0",
-        f"/investigations/{investigation_id}/timeline?limit=20&offset=0", f"/investigations/{investigation_id}/entities?limit=20&offset=0",
-        f"/investigations/{investigation_id}/indicators?limit=20&offset=0", f"/investigations/{investigation_id}/relationships",
-        f"/investigations/{investigation_id}/intelligence/runs?limit=20&offset=0", f"/investigations/{investigation_id}/findings?limit=20&offset=0",
-        f"/investigations/{investigation_id}/mitre?limit=20&offset=0", f"/investigations/{investigation_id}/notes?limit=20&offset=0",
-        f"/investigations/{investigation_id}/audit?limit=20&offset=0",
-    ]
-    started = time.monotonic(); statuses: Counter[int] = Counter(); latencies: list[float] = []
-    def read(endpoint: str) -> tuple[int, float]:
-        tick = time.monotonic(); status, _ = _request(f"{api}{endpoint}", token=token); return status, (time.monotonic() - tick) * 1000
-    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
-        for status, latency in pool.map(read, endpoints):
+            status, latency = _result(future, deadline, "ingestion_future")
             statuses[status] += 1; latencies.append(latency)
-    elapsed = time.monotonic() - started
-    if elapsed > timeout: raise RuntimeError("read scenario exceeded its fixed duration bound")
-    return {"scenario": "bounded_reads", "requests": len(endpoints), "server_errors": sum(count for status, count in statuses.items() if status >= 500),
-            "client_errors": sum(count for status, count in statuses.items() if 400 <= status < 500), "p50_ms": _percentile(latencies, .50),
-            "p95_ms": _percentile(latencies, .95), "p99_ms": _percentile(latencies, .99), "duration_seconds": round(elapsed, 2)}
+    elapsed = time.monotonic() - started; state.complete()
+    return {"scenario": name, "events": events, "accepted": sum(v for k, v in statuses.items() if 200 <= k < 300), "rejected": sum(v for k, v in statuses.items() if 400 <= k < 500), "server_errors": sum(v for k, v in statuses.items() if k >= 500), "p50_ms": _percentile(latencies, .5), "p95_ms": _percentile(latencies, .95), "p99_ms": _percentile(latencies, .99), "duration_seconds": round(elapsed, 2), "throughput_events_per_second": round(events / elapsed, 2)}
 
 
-def main() -> int:
+def _read_scenario(api: str, token: str, concurrency: int, timeout: int, state: State) -> dict:
+    state.begin("bounded_reads")
+    connector_id, secret = _connector(api, token, "read-seed", state)
+    status, body = _call(state, f"{api}/ingest/webhook/{connector_id}", category="READ_REQUEST_TIMEOUT", operation="read_seed_ingestion", method="POST", payload={"title": "Synthetic bounded pilot investigation", "severity": "low", "description": "Synthetic benign test record.", "indicators": []}, secret=secret)
+    investigation = _json(status, body, "read_seed_ingestion").get("investigation_id")
+    if not isinstance(investigation, str):
+        raise DriverFailure("READ_CONTRACT_REJECTED", "read_seed_ingestion")
+    endpoints = ["/investigations/dashboard-summary?window=7d", "/investigations?limit=20&offset=0", "/alert-triage/clusters?limit=20&offset=0", f"/investigations/{investigation}/overview", f"/investigations/{investigation}/evidence/inventory?limit=20&offset=0", f"/investigations/{investigation}/timeline?limit=20&offset=0", f"/investigations/{investigation}/entities?limit=20&offset=0", f"/investigations/{investigation}/indicators?limit=20&offset=0", f"/investigations/{investigation}/relationships", f"/investigations/{investigation}/intelligence/runs?limit=20&offset=0", f"/investigations/{investigation}/findings?limit=20&offset=0", f"/investigations/{investigation}/mitre?limit=20&offset=0", f"/investigations/{investigation}/notes?limit=20&offset=0", f"/investigations/{investigation}/audit?limit=20&offset=0"]
+    started, deadline, statuses, latencies = time.monotonic(), time.monotonic() + timeout, Counter(), []
+    def read(endpoint: str) -> tuple[int, float]:
+        tick = time.monotonic(); status, _ = _call(state, f"{api}{endpoint}", category="READ_REQUEST_TIMEOUT", operation="bounded_read", token=token); return status, (time.monotonic() - tick) * 1000
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+        for future in [pool.submit(read, endpoint) for endpoint in endpoints]:
+            status, latency = _result(future, deadline, "read_future")
+            statuses[status] += 1; latencies.append(latency)
+    elapsed = time.monotonic() - started; state.complete()
+    return {"scenario": "bounded_reads", "requests": len(endpoints), "server_errors": sum(v for k, v in statuses.items() if k >= 500), "client_errors": sum(v for k, v in statuses.items() if 400 <= k < 500), "p50_ms": _percentile(latencies, .5), "p95_ms": _percentile(latencies, .95), "p99_ms": _percentile(latencies, .99), "duration_seconds": round(elapsed, 2)}
+
+
+def _smoke(api: str, token: str, state: State) -> dict:
+    """One ingestion and one authenticated bounded read; never a benchmark."""
+    state.begin("measurement_smoke")
+    connector_id, secret = _connector(api, token, "measurement-smoke", state)
+    status, _ = _call(state, f"{api}/ingest/wazuh/v1/{connector_id}", category="INGEST_REQUEST_TIMEOUT", operation="wazuh_ingestion", method="POST", payload=_payload("smoke", 0), secret=secret)
+    if not 200 <= status < 300:
+        raise DriverFailure("INGEST_CONTRACT_REJECTED", "wazuh_ingestion")
+    status, _ = _call(state, f"{api}/investigations/dashboard-summary?window=7d", category="READ_REQUEST_TIMEOUT", operation="bounded_read", token=token)
+    if not 200 <= status < 300:
+        raise DriverFailure("READ_CONTRACT_REJECTED", "bounded_read")
+    state.complete()
+    return {"scenario": "measurement_smoke", "requests": 2, "status": "completed"}
+
+
+def _write_status(path: str, state: State, category: str = "", operation: str = "") -> None:
+    target = Path(path)
+    if target.is_symlink():
+        raise DriverFailure("DRIVER_STATUS_PATH_INVALID", "status_persistence")
+    value = {"aggregate_only": True, "current_scenario": state.current_scenario, "last_completed_scenario": state.last_completed_scenario, "failed_scenario": state.current_scenario if category else "", "safe_failure_category": category, "service_or_operation": operation, "completed_requests": state.completed_requests, "requested_requests": state.requested_requests, "elapsed_seconds": round(time.monotonic() - state.started, 2), "measurement_started": True}
+    temporary = target.with_name(f".{target.name}.{os.getpid()}")
+    temporary.write_text(json.dumps(value, separators=(",", ":")) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600); os.replace(temporary, target)
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=True)
-    parser.add_argument("--api", required=True); parser.add_argument("--email-file", required=True); parser.add_argument("--initial-password-file", required=True); parser.add_argument("--rotated-password-file", required=True)
+    for option in ("api", "email-file", "initial-password-file", "rotated-password-file", "status-file"):
+        parser.add_argument(f"--{option}", required=True)
+    parser.add_argument("--smoke-only", action="store_true")
     for name, default in (("baseline-events", 300), ("baseline-rate", 5), ("baseline-concurrency", 5), ("baseline-timeout", 180), ("burst-events", 150), ("burst-rate", 10), ("burst-concurrency", 10), ("burst-timeout", 90), ("read-concurrency", 10), ("read-timeout", 180), ("forwarder-events", 25), ("forwarder-timeout", 180)):
         parser.add_argument(f"--{name}", type=int, default=default)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not args.api.startswith("http://127.0.0.1:"):
         raise SystemExit("local loopback API endpoint required")
-    token = _login_and_rotate(args.api, _read_secret(args.email_file), _read_secret(args.initial_password_file), _read_secret(args.rotated_password_file))
-    results = [
-        _send_scenario(args.api, token, name="ingestion_baseline", events=args.baseline_events, rate=args.baseline_rate, concurrency=args.baseline_concurrency, timeout=args.baseline_timeout),
-        _send_scenario(args.api, token, name="controlled_burst", events=args.burst_events, rate=args.burst_rate, concurrency=args.burst_concurrency, timeout=args.burst_timeout),
-        _read_scenario(args.api, token, args.read_concurrency, args.read_timeout),
-    ]
-    # Forwarder outage/recovery requires a loopback TLS proxy/CA fixture. It
-    # is intentionally run by the shell harness only after its TLS contract is
-    # available; never downgrade the durable forwarder to plaintext for a load test.
+    state = State(time.monotonic())
+    try:
+        token = _login_and_rotate(args.api, _read_secret(args.email_file), _read_secret(args.initial_password_file), _read_secret(args.rotated_password_file), state); state.complete()
+        results = [_smoke(args.api, token, state)] if args.smoke_only else [_send_scenario(args.api, token, name="ingestion_baseline", events=args.baseline_events, rate=args.baseline_rate, concurrency=args.baseline_concurrency, timeout=args.baseline_timeout, state=state), _send_scenario(args.api, token, name="controlled_burst", events=args.burst_events, rate=args.burst_rate, concurrency=args.burst_concurrency, timeout=args.burst_timeout, state=state), _read_scenario(args.api, token, args.read_concurrency, args.read_timeout, state)]
+    except DriverFailure as failure:
+        _write_status(args.status_file, state, failure.category, failure.operation); return 2
+    except TimeoutError:
+        _write_status(args.status_file, state, "DRIVER_UNCLASSIFIED_TIMEOUT", "driver_boundary"); return 2
+    except Exception:
+        _write_status(args.status_file, state, "DRIVER_CONTRACT_FAILED", "driver_boundary"); return 2
+    _write_status(args.status_file, state)
     print(json.dumps({"aggregate_only": True, "scenarios": results}, separators=(",", ":")))
     return 0
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:
-        print(json.dumps({"aggregate_only": True, "safe_failure_category": type(exc).__name__}), file=sys.stderr)
-        raise SystemExit(2)
+    raise SystemExit(main())
