@@ -159,12 +159,21 @@ write_result() {
   mv -f -- "$temporary" "$RESULT_DIR/$name"
 }
 
+write_json_result() {
+  local name="$1" value="$2" temporary
+  temporary="$RESULT_DIR/.${name}.$$"
+  umask 077
+  python3 -c 'import json, os, sys; target, value = sys.argv[1:]; parsed = json.loads(value); payload = json.dumps(parsed, separators=(",", ":")) + chr(10); fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); handle = os.fdopen(fd, "w"); handle.write(payload); handle.flush(); os.fsync(handle.fileno()); handle.close(); json.load(open(target, encoding="utf-8"))' "$temporary" "$value"
+  chmod 600 "$temporary"
+  mv -f -- "$temporary" "$RESULT_DIR/$name"
+}
+
 write_status() {
   local status="$1" exit_code="$2"
   if [[ "$CAMPAIGN" == "v1-b3" ]]; then
-    write_result status.json "{\"campaign_id\":\"$CAMPAIGN_ID\",\"campaign_status\":\"$CAMPAIGN_STATUS\",\"source_commit\":\"$(git -C "$REPO_ROOT" rev-parse HEAD)\",\"migration_head\":\"0024\",\"workload_profile\":\"$WORKLOAD_PROFILE\",\"optimization_under_revalidation\":\"$OPTIMIZATION_UNDER_REVALIDATION\",\"harness_exit_code\":$exit_code,\"current_stage\":\"$CURRENT_STAGE\",\"last_completed_stage\":\"$LAST_COMPLETED_STAGE\",\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service_or_operation\":\"$FAILED_SERVICE\",\"elapsed_seconds\":$((SECONDS - RUN_STARTED_SECONDS)),\"measurement_started\":$MEASUREMENT_STARTED,\"current_scenario\":\"$DRIVER_CURRENT_SCENARIO\",\"last_completed_scenario\":\"$DRIVER_LAST_COMPLETED_SCENARIO\",\"failed_scenario\":\"$DRIVER_FAILED_SCENARIO\",\"completed_requests\":$DRIVER_COMPLETED_REQUESTS,\"requested_requests\":$DRIVER_REQUESTED_REQUESTS,\"cleanup\":\"$CLEANUP_STATUS\"}"
+    write_json_result status.json "{\"campaign_id\":\"$CAMPAIGN_ID\",\"campaign_status\":\"$CAMPAIGN_STATUS\",\"source_commit\":\"$(git -C "$REPO_ROOT" rev-parse HEAD)\",\"migration_head\":\"0024\",\"workload_profile\":\"$WORKLOAD_PROFILE\",\"optimization_under_revalidation\":\"$OPTIMIZATION_UNDER_REVALIDATION\",\"harness_exit_code\":$exit_code,\"current_stage\":\"$CURRENT_STAGE\",\"last_completed_stage\":\"$LAST_COMPLETED_STAGE\",\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service_or_operation\":\"$FAILED_SERVICE\",\"elapsed_seconds\":$((SECONDS - RUN_STARTED_SECONDS)),\"measurement_started\":$MEASUREMENT_STARTED,\"current_scenario\":\"$DRIVER_CURRENT_SCENARIO\",\"last_completed_scenario\":\"$DRIVER_LAST_COMPLETED_SCENARIO\",\"failed_scenario\":\"$DRIVER_FAILED_SCENARIO\",\"completed_requests\":$DRIVER_COMPLETED_REQUESTS,\"requested_requests\":$DRIVER_REQUESTED_REQUESTS,\"cleanup\":\"$CLEANUP_STATUS\"}"
   else
-    write_result status.json "{\"v1_b2_status\":\"$status\",\"smoke_status\":\"$SMOKE_STATUS\",\"harness_exit_code\":$exit_code,\"current_stage\":\"$CURRENT_STAGE\",\"last_completed_stage\":\"$LAST_COMPLETED_STAGE\",\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service_or_operation\":\"$FAILED_SERVICE\",\"elapsed_seconds\":$((SECONDS - RUN_STARTED_SECONDS)),\"measurement_started\":$MEASUREMENT_STARTED,\"current_scenario\":\"$DRIVER_CURRENT_SCENARIO\",\"last_completed_scenario\":\"$DRIVER_LAST_COMPLETED_SCENARIO\",\"failed_scenario\":\"$DRIVER_FAILED_SCENARIO\",\"completed_requests\":$DRIVER_COMPLETED_REQUESTS,\"requested_requests\":$DRIVER_REQUESTED_REQUESTS,\"cleanup\":\"$CLEANUP_STATUS\"}"
+    write_json_result status.json "{\"v1_b2_status\":\"$status\",\"smoke_status\":\"$SMOKE_STATUS\",\"harness_exit_code\":$exit_code,\"current_stage\":\"$CURRENT_STAGE\",\"last_completed_stage\":\"$LAST_COMPLETED_STAGE\",\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service_or_operation\":\"$FAILED_SERVICE\",\"elapsed_seconds\":$((SECONDS - RUN_STARTED_SECONDS)),\"measurement_started\":$MEASUREMENT_STARTED,\"current_scenario\":\"$DRIVER_CURRENT_SCENARIO\",\"last_completed_scenario\":\"$DRIVER_LAST_COMPLETED_SCENARIO\",\"failed_scenario\":\"$DRIVER_FAILED_SCENARIO\",\"completed_requests\":$DRIVER_COMPLETED_REQUESTS,\"requested_requests\":$DRIVER_REQUESTED_REQUESTS,\"cleanup\":\"$CLEANUP_STATUS\"}"
   fi
 }
 
@@ -316,10 +325,9 @@ EOF
   chmod 600 "$RUNTIME_DIR/compose.env"
 }
 
-decorate_v1b3_aggregate() {
-  local target="$1"
-  [[ "$CAMPAIGN" == "v1-b3" ]] || return 0
-  python3 -c 'import json, os, sys; path=sys.argv[1]; value=json.load(open(path)); assert isinstance(value, dict); value.update({"campaign_id":"V1-B3","campaign_status":sys.argv[2],"source_commit":sys.argv[3],"migration_head":"0024","workload_profile":"V1-B2-UNCHANGED","optimization_under_revalidation":"correlation-v2 bulk candidate/member reads"}); temporary=path+".campaign"; fd=os.open(temporary, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0o600); handle=os.fdopen(fd, "w"); handle.write(json.dumps(value, separators=(",", ":"))+"\\n"); handle.flush(); os.fsync(handle.fileno()); handle.close(); os.replace(temporary, path)' "$target" "$2" "$(git -C "$REPO_ROOT" rev-parse HEAD)"
+finalize_aggregate() {
+  local source="$1" campaign_status="$2"
+  python3 -c 'import json, os, sys; source, target, campaign, status, commit = sys.argv[1:]; value = json.load(open(source, encoding="utf-8")); assert isinstance(value, dict); (value.update({"campaign_id":"V1-B3","campaign_status":status,"source_commit":commit,"migration_head":"0024","workload_profile":"V1-B2-UNCHANGED","optimization_under_revalidation":"correlation-v2 bulk candidate/member reads"}) if campaign == "v1-b3" else None); payload = json.dumps(value, separators=(",", ":")) + chr(10); temporary = target + ".tmp"; fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600); handle = os.fdopen(fd, "w"); handle.write(payload); handle.flush(); os.fsync(handle.fileno()); handle.close(); json.load(open(temporary, encoding="utf-8")); os.replace(temporary, target)' "$source" "$RESULT_DIR/aggregate.json" "$CAMPAIGN" "$campaign_status" "$(git -C "$REPO_ROOT" rev-parse HEAD)"
 }
 
 start_core() {
@@ -410,15 +418,15 @@ measure() {
     fi
     if [[ -f "$driver_status" && ! -L "$driver_status" ]]; then
       CAMPAIGN_STATUS="FAILED"
-      decorate_v1b3_aggregate "$driver_status" "$CAMPAIGN_STATUS"
-      mv -f -- "$driver_status" "$RESULT_DIR/aggregate.json"
+      finalize_aggregate "$driver_status" "$CAMPAIGN_STATUS"
+      rm -f -- "$driver_status"
     fi
     return "$driver_exit"
   fi
   chmod 600 "$aggregate_tmp"
   CAMPAIGN_STATUS="COMPLETED"
-  decorate_v1b3_aggregate "$aggregate_tmp" "$CAMPAIGN_STATUS"
-  mv -f -- "$aggregate_tmp" "$RESULT_DIR/aggregate.json"
+  finalize_aggregate "$aggregate_tmp" "$CAMPAIGN_STATUS"
+  rm -f -- "$aggregate_tmp"
   rm -f -- "$driver_status"
   if "$SMOKE_ONLY"; then SMOKE_STATUS="SMOKE_PASS"; fi
   mark_stage_completed "measurement"
@@ -433,9 +441,9 @@ main() {
   assert_disposable_target
   assert_host_safety
   if [[ "$CAMPAIGN" == "v1-b3" ]]; then
-    write_result aggregate.json "{\"campaign_id\":\"V1-B3\",\"campaign_status\":\"NOT_MEASURED\",\"source_commit\":\"$(git -C "$REPO_ROOT" rev-parse HEAD)\",\"migration_head\":\"0024\",\"workload_profile\":\"V1-B2-UNCHANGED\",\"optimization_under_revalidation\":\"correlation-v2 bulk candidate/member reads\",\"aggregate_only\":true,\"scenarios\":[]}"
+    write_json_result aggregate.json "{\"campaign_id\":\"V1-B3\",\"campaign_status\":\"NOT_MEASURED\",\"source_commit\":\"$(git -C "$REPO_ROOT" rev-parse HEAD)\",\"migration_head\":\"0024\",\"workload_profile\":\"V1-B2-UNCHANGED\",\"optimization_under_revalidation\":\"correlation-v2 bulk candidate/member reads\",\"aggregate_only\":true,\"scenarios\":[]}"
   else
-    write_result aggregate.json "{\"v1_b2_status\":\"NOT_MEASURED\",\"aggregate_only\":true,\"scenarios\":[]}"
+    write_json_result aggregate.json "{\"v1_b2_status\":\"NOT_MEASURED\",\"aggregate_only\":true,\"scenarios\":[]}"
   fi
   if "$PREFLIGHT_ONLY"; then
     command -v docker >/dev/null || fail "Docker CLI is required"

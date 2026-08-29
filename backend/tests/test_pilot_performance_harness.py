@@ -1,4 +1,6 @@
 """Static guardrails for the V1-B2 local-only pilot harness."""
+import json
+import subprocess
 from pathlib import Path
 
 
@@ -144,5 +146,52 @@ def test_v1_b3_rejects_v1_b2_results_and_labels_only_its_own_safe_artifacts():
     assert '\\"campaign_status\\":\\"$CAMPAIGN_STATUS\\"' in text
     assert '\\"source_commit\\"' in text and '\\"migration_head\\":\\"0024\\"' in text
     assert 'V1-B3 STATUS: %s' in text
-    assert 'decorate_v1b3_aggregate' in text
+    assert 'finalize_aggregate' in text
     assert 'No credentials, payloads, response bodies, logs, or environment values are retained.' in text
+
+
+def test_json_artifacts_have_one_atomic_strict_finalization_path_without_appends():
+    text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    assert 'write_json_result() {' in text
+    assert 'json.loads(value)' in text and 'json.load(open(target, encoding="utf-8"))' in text
+    assert 'json.load(open(temporary, encoding="utf-8")); os.replace(temporary, target)' in text
+    assert 'payload = json.dumps(value, separators=(",", ":")) + chr(10)' in text
+    assert 'mv -f -- "$driver_status" "$RESULT_DIR/aggregate.json"' not in text
+    assert 'mv -f -- "$aggregate_tmp" "$RESULT_DIR/aggregate.json"' not in text
+    assert '>>"$RESULT_DIR/aggregate.json"' not in text
+    assert 'finalize_aggregate "$driver_status" "$CAMPAIGN_STATUS"' in text
+    assert 'finalize_aggregate "$aggregate_tmp" "$CAMPAIGN_STATUS"' in text
+
+
+def test_v1_b3_finalizer_preserves_safe_failure_state_as_one_strict_json_document(tmp_path):
+    harness = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    library = tmp_path / "pilot-library.sh"
+    library.write_text(harness.rsplit('\nmain "$@"', 1)[0] + "\n", encoding="utf-8")
+    source = tmp_path / "driver-status.json"
+    source.write_text(json.dumps({"aggregate_only": True, "completed_scenarios": [{"scenario": "ingestion_baseline", "accepted": 280}], "safe_failure_category": "FUTURE_COMPLETION_TIMEOUT"}) + "\n", encoding="utf-8")
+    result_dir = tmp_path / "results"
+    result_dir.mkdir(mode=0o700)
+    command = 'source "$1"; trap - EXIT ERR INT TERM; RESULT_DIR="$2"; CAMPAIGN=v1-b3; REPO_ROOT="$3"; finalize_aggregate "$4" FAILED; write_json_result status.json "{\\"campaign_id\\":\\"V1-B3\\",\\"campaign_status\\":\\"FAILED\\"}"; write_json_result status.json "{\\"campaign_id\\":\\"V1-B3\\",\\"campaign_status\\":\\"FAILED\\"}"'
+    subprocess.run(["bash", "-c", command, "bash", str(library), str(result_dir), str(ROOT), str(source)], check=True, capture_output=True, text=True)
+    aggregate = (result_dir / "aggregate.json").read_text(encoding="utf-8")
+    status = (result_dir / "status.json").read_text(encoding="utf-8")
+    assert json.loads(aggregate)["completed_scenarios"][0]["accepted"] == 280
+    assert json.loads(aggregate)["campaign_id"] == "V1-B3"
+    assert json.loads(aggregate)["campaign_status"] == "FAILED"
+    assert json.loads(status)["campaign_status"] == "FAILED"
+    assert aggregate.endswith("\n") and not aggregate.endswith("\\n")
+    assert (result_dir / "aggregate.json").stat().st_mode & 0o777 == 0o600
+
+
+def test_v1_b3_finalizer_rejects_trailing_bytes_without_replacing_a_final_artifact(tmp_path):
+    harness = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    library = tmp_path / "pilot-library.sh"
+    library.write_text(harness.rsplit('\nmain "$@"', 1)[0] + "\n", encoding="utf-8")
+    source = tmp_path / "invalid-driver-status.json"
+    source.write_text('{}\\n2', encoding="utf-8")
+    result_dir = tmp_path / "results"
+    result_dir.mkdir(mode=0o700)
+    command = 'source "$1"; trap - EXIT ERR INT TERM; RESULT_DIR="$2"; CAMPAIGN=v1-b3; REPO_ROOT="$3"; finalize_aggregate "$4" FAILED'
+    run = subprocess.run(["bash", "-c", command, "bash", str(library), str(result_dir), str(ROOT), str(source)], capture_output=True, text=True)
+    assert run.returncode != 0
+    assert not (result_dir / "aggregate.json").exists()
