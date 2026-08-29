@@ -5,6 +5,7 @@
 set -euo pipefail
 
 readonly PROJECT_DEFAULT="aegis-v1b2-pilot"
+readonly V1B3_PROJECT_DEFAULT="aegis-v1b3-pilot-revalidation"
 readonly API_PORT_DEFAULT="18100"
 readonly FRONTEND_PORT_DEFAULT="13100"
 readonly MIN_FREE_KIB=$((15 * 1024 * 1024))
@@ -20,7 +21,12 @@ FRONTEND_PORT="${AEGIS_V1B2_FRONTEND_PORT:-$FRONTEND_PORT_DEFAULT}"
 API_ORIGIN="http://127.0.0.1:${API_PORT}"
 FRONTEND_ORIGIN="http://127.0.0.1:${FRONTEND_PORT}"
 RUNTIME_DIR=""
-RESULT_DIR="${AEGIS_V1B2_RESULT_DIR:-}"
+RESULT_DIR=""
+CAMPAIGN="v1-b2"
+CAMPAIGN_ID="V1-B2"
+CAMPAIGN_STATUS="NOT_MEASURED"
+WORKLOAD_PROFILE="V1-B2-UNCHANGED"
+OPTIMIZATION_UNDER_REVALIDATION=""
 PREFLIGHT_ONLY=false
 SMOKE_ONLY=false
 BASELINE_ONLY=false
@@ -59,7 +65,7 @@ fail() {
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/release/run-pilot-performance.sh --result-dir /absolute/specific/path [--preflight-only|--smoke-only]
+Usage: ./scripts/release/run-pilot-performance.sh --result-dir /absolute/specific/path [--campaign v1-b3] [--preflight-only|--smoke-only]
 
 Runs the bounded V1-B2 synthetic pilot harness from the repository root.
 Maximum measured workload is approximately 12 minutes plus serialized image
@@ -77,6 +83,15 @@ Verify cleanup with: docker ps -a --filter label=com.docker.compose.project=aegi
 ingestion plus one authenticated bounded read after PostgreSQL, migration, API,
 and internal admin bootstrap. It never starts frontend, worker, beat, Ollama,
 Wazuh, or any baseline, burst, forwarder, restart, or resource-envelope stage.
+
+--campaign v1-b3 runs the exact unchanged V1-B2 workload under a separate
+aegis-v1b3-pilot-* namespace. It requires a distinct result directory and
+rejects any path that resolves to preserved V1-B2 results. V1-B3 does not
+alter event counts, rates, timeouts, thresholds, payloads, or cleanup.
+
+V1-B3 owner command:
+  ./scripts/release/run-pilot-performance.sh --campaign v1-b3 \
+    --result-dir /home/omar/.local/state/aegis-v1b3-performance
 EOF
 }
 
@@ -87,10 +102,30 @@ parse_args() {
       --preflight-only) PREFLIGHT_ONLY=true; shift ;;
       --smoke-only) SMOKE_ONLY=true; shift ;;
       --baseline-only) BASELINE_ONLY=true; shift ;;
+      --campaign) (($# >= 2)) || fail "--campaign requires v1-b3"; CAMPAIGN="$2"; shift 2 ;;
       --help|-h) usage; exit 0 ;;
       *) fail "unsupported argument" ;;
     esac
   done
+}
+
+configure_campaign() {
+  case "$CAMPAIGN" in
+    v1-b2)
+      CAMPAIGN_ID="V1-B2"
+      PROJECT="${AEGIS_V1B2_PROJECT:-$PROJECT_DEFAULT}"
+      [[ -n "$RESULT_DIR" ]] || RESULT_DIR="${AEGIS_V1B2_RESULT_DIR:-}"
+      ;;
+    v1-b3)
+      CAMPAIGN_ID="V1-B3"
+      PROJECT="${AEGIS_V1B3_PROJECT:-$V1B3_PROJECT_DEFAULT}"
+      [[ -n "$RESULT_DIR" ]] || RESULT_DIR="${AEGIS_V1B3_RESULT_DIR:-}"
+      OPTIMIZATION_UNDER_REVALIDATION="correlation-v2 bulk candidate/member reads"
+      "$SMOKE_ONLY" && fail "V1-B3 requires the complete unchanged V1-B2 workload"
+      "$BASELINE_ONLY" && fail "V1-B3 requires the complete unchanged V1-B2 workload"
+      ;;
+    *) fail "unsupported campaign" ;;
+  esac
   [[ -n "$RESULT_DIR" ]] || fail "--result-dir is required"
 }
 
@@ -102,6 +137,9 @@ validate_result_dir() {
   parent=$(dirname "$resolved")
   [[ -d "$parent" && ! -L "$parent" ]] || fail "result directory parent must be an existing non-symlink directory"
   case "$resolved" in /|/home|"$HOME"|"$REPO_ROOT"|"$REPO_ROOT"/*|*aegis-r4-*|*r4-acceptance*) fail "unsafe result directory";; esac
+  if [[ "$CAMPAIGN" == "v1-b3" && ( "$resolved" == *aegis-v1b2-* || "$resolved" == *v1b2-performance* ) ]]; then
+    fail "V1-B3 result directory must not resolve to preserved V1-B2 results"
+  fi
   [[ "$(basename "$resolved")" != "." && "$(basename "$resolved")" != ".." ]] || fail "result directory must be specific"
   RESULT_DIR="$resolved"
   if [[ -e "$RESULT_DIR" ]]; then
@@ -123,7 +161,11 @@ write_result() {
 
 write_status() {
   local status="$1" exit_code="$2"
-  write_result status.json "{\"v1_b2_status\":\"$status\",\"smoke_status\":\"$SMOKE_STATUS\",\"harness_exit_code\":$exit_code,\"current_stage\":\"$CURRENT_STAGE\",\"last_completed_stage\":\"$LAST_COMPLETED_STAGE\",\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service_or_operation\":\"$FAILED_SERVICE\",\"elapsed_seconds\":$((SECONDS - RUN_STARTED_SECONDS)),\"measurement_started\":$MEASUREMENT_STARTED,\"current_scenario\":\"$DRIVER_CURRENT_SCENARIO\",\"last_completed_scenario\":\"$DRIVER_LAST_COMPLETED_SCENARIO\",\"failed_scenario\":\"$DRIVER_FAILED_SCENARIO\",\"completed_requests\":$DRIVER_COMPLETED_REQUESTS,\"requested_requests\":$DRIVER_REQUESTED_REQUESTS,\"cleanup\":\"$CLEANUP_STATUS\"}"
+  if [[ "$CAMPAIGN" == "v1-b3" ]]; then
+    write_result status.json "{\"campaign_id\":\"$CAMPAIGN_ID\",\"campaign_status\":\"$CAMPAIGN_STATUS\",\"source_commit\":\"$(git -C "$REPO_ROOT" rev-parse HEAD)\",\"migration_head\":\"0024\",\"workload_profile\":\"$WORKLOAD_PROFILE\",\"optimization_under_revalidation\":\"$OPTIMIZATION_UNDER_REVALIDATION\",\"harness_exit_code\":$exit_code,\"current_stage\":\"$CURRENT_STAGE\",\"last_completed_stage\":\"$LAST_COMPLETED_STAGE\",\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service_or_operation\":\"$FAILED_SERVICE\",\"elapsed_seconds\":$((SECONDS - RUN_STARTED_SECONDS)),\"measurement_started\":$MEASUREMENT_STARTED,\"current_scenario\":\"$DRIVER_CURRENT_SCENARIO\",\"last_completed_scenario\":\"$DRIVER_LAST_COMPLETED_SCENARIO\",\"failed_scenario\":\"$DRIVER_FAILED_SCENARIO\",\"completed_requests\":$DRIVER_COMPLETED_REQUESTS,\"requested_requests\":$DRIVER_REQUESTED_REQUESTS,\"cleanup\":\"$CLEANUP_STATUS\"}"
+  else
+    write_result status.json "{\"v1_b2_status\":\"$status\",\"smoke_status\":\"$SMOKE_STATUS\",\"harness_exit_code\":$exit_code,\"current_stage\":\"$CURRENT_STAGE\",\"last_completed_stage\":\"$LAST_COMPLETED_STAGE\",\"failed_stage\":\"$FAILED_STAGE\",\"safe_failure_category\":\"$SAFE_FAILURE_CATEGORY\",\"service_or_operation\":\"$FAILED_SERVICE\",\"elapsed_seconds\":$((SECONDS - RUN_STARTED_SECONDS)),\"measurement_started\":$MEASUREMENT_STARTED,\"current_scenario\":\"$DRIVER_CURRENT_SCENARIO\",\"last_completed_scenario\":\"$DRIVER_LAST_COMPLETED_SCENARIO\",\"failed_scenario\":\"$DRIVER_FAILED_SCENARIO\",\"completed_requests\":$DRIVER_COMPLETED_REQUESTS,\"requested_requests\":$DRIVER_REQUESTED_REQUESTS,\"cleanup\":\"$CLEANUP_STATUS\"}"
+  fi
 }
 
 mark_stage() {
@@ -141,8 +183,13 @@ write_operator_summary() {
   local status="$1" cleanup_status="$2" temporary
   temporary="$RESULT_DIR/.operator-summary.txt.$$"
   umask 077
-  printf 'V1-B2 STATUS: NOT MEASURED\nHarness exit category: %s\nCurrent stage: %s\nLast completed stage: %s\nMeasurement started: %s\nCleanup: %s\n' \
-    "$status" "$CURRENT_STAGE" "$LAST_COMPLETED_STAGE" "$MEASUREMENT_STARTED" "$cleanup_status" >"$temporary"
+  if [[ "$CAMPAIGN" == "v1-b3" ]]; then
+    printf 'V1-B3 STATUS: %s\nWorkload profile: %s\nOptimization under revalidation: %s\nHarness exit category: %s\nCurrent stage: %s\nLast completed stage: %s\nMeasurement started: %s\nCleanup: %s\n' \
+      "$CAMPAIGN_STATUS" "$WORKLOAD_PROFILE" "$OPTIMIZATION_UNDER_REVALIDATION" "$status" "$CURRENT_STAGE" "$LAST_COMPLETED_STAGE" "$MEASUREMENT_STARTED" "$cleanup_status" >"$temporary"
+  else
+    printf 'V1-B2 STATUS: NOT MEASURED\nHarness exit category: %s\nCurrent stage: %s\nLast completed stage: %s\nMeasurement started: %s\nCleanup: %s\n' \
+      "$status" "$CURRENT_STAGE" "$LAST_COMPLETED_STAGE" "$MEASUREMENT_STARTED" "$cleanup_status" >"$temporary"
+  fi
   if [[ -n "$SAFE_FAILURE_CATEGORY" ]]; then
     printf 'Safe failure category: %s\nFailed stage: %s\nService: %s\nElapsed seconds: %s\n' \
       "$SAFE_FAILURE_CATEGORY" "$FAILED_STAGE" "$FAILED_SERVICE" "$FAILED_ELAPSED_SECONDS" >>"$temporary"
@@ -183,12 +230,14 @@ cleanup() {
 on_err() {
   local status="$1"
   set_safe_failure "HARNESS_COMMAND_FAILED" "$CURRENT_STAGE" "$CURRENT_OPERATION"
+  [[ "$CAMPAIGN" == "v1-b3" && "$MEASUREMENT_STARTED" == "true" ]] && CAMPAIGN_STATUS="FAILED"
   cleanup "$status"
 }
 
 on_signal() {
   local signal="$1" status="$2"
   set_safe_failure "HARNESS_INTERRUPTED_${signal}" "$CURRENT_STAGE" "$CURRENT_OPERATION"
+  [[ "$CAMPAIGN" == "v1-b3" && "$MEASUREMENT_STARTED" == "true" ]] && CAMPAIGN_STATUS="FAILED"
   cleanup "$status"
 }
 
@@ -198,7 +247,11 @@ trap 'on_signal INT 130' INT
 trap 'on_signal TERM 143' TERM
 
 assert_disposable_target() {
-  [[ "$PROJECT" =~ ^aegis-v1b2-[a-z0-9-]+$ ]] || fail "project must use the aegis-v1b2-* namespace"
+  if [[ "$CAMPAIGN" == "v1-b3" ]]; then
+    [[ "$PROJECT" =~ ^aegis-v1b3-pilot-[a-z0-9-]+$ ]] || fail "V1-B3 project must use the aegis-v1b3-pilot-* namespace"
+  else
+    [[ "$PROJECT" =~ ^aegis-v1b2-[a-z0-9-]+$ ]] || fail "project must use the aegis-v1b2-* namespace"
+  fi
   [[ "$PROJECT" != *r4* ]] || fail "preserved R4 resources are never a harness target"
   [[ "$API_ORIGIN" =~ ^http://127\.0\.0\.1:[0-9]+$ ]] || fail "API target must be loopback"
   [[ "$FRONTEND_ORIGIN" =~ ^http://127\.0\.0\.1:[0-9]+$ ]] || fail "frontend target must be loopback"
@@ -228,7 +281,11 @@ wait_http() {
 }
 
 write_runtime() {
-  RUNTIME_DIR=$(mktemp -d /tmp/aegis-v1b2-XXXXXX)
+  if [[ "$CAMPAIGN" == "v1-b3" ]]; then
+    RUNTIME_DIR=$(mktemp -d /tmp/aegis-v1b3-pilot-XXXXXX)
+  else
+    RUNTIME_DIR=$(mktemp -d /tmp/aegis-v1b2-XXXXXX)
+  fi
   chmod 700 "$RUNTIME_DIR"
   umask 077
   head -c 36 /dev/urandom | base64 >"$RUNTIME_DIR/postgres_password"
@@ -257,6 +314,12 @@ INTELLIGENCE_DISPATCH_ENABLED=false
 INTELLIGENCE_PROVIDER_ENABLED=false
 EOF
   chmod 600 "$RUNTIME_DIR/compose.env"
+}
+
+decorate_v1b3_aggregate() {
+  local target="$1"
+  [[ "$CAMPAIGN" == "v1-b3" ]] || return 0
+  python3 -c 'import json, os, sys; path=sys.argv[1]; value=json.load(open(path)); assert isinstance(value, dict); value.update({"campaign_id":"V1-B3","campaign_status":sys.argv[2],"source_commit":sys.argv[3],"migration_head":"0024","workload_profile":"V1-B2-UNCHANGED","optimization_under_revalidation":"correlation-v2 bulk candidate/member reads"}); temporary=path+".campaign"; fd=os.open(temporary, os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0o600); handle=os.fdopen(fd, "w"); handle.write(json.dumps(value, separators=(",", ":"))+"\\n"); handle.flush(); os.fsync(handle.fileno()); handle.close(); os.replace(temporary, path)' "$target" "$2" "$(git -C "$REPO_ROOT" rev-parse HEAD)"
 }
 
 start_core() {
@@ -346,11 +409,15 @@ measure() {
       set_safe_failure "DRIVER_STATUS_UNAVAILABLE" "measurement" "pilot_performance_driver"
     fi
     if [[ -f "$driver_status" && ! -L "$driver_status" ]]; then
+      CAMPAIGN_STATUS="FAILED"
+      decorate_v1b3_aggregate "$driver_status" "$CAMPAIGN_STATUS"
       mv -f -- "$driver_status" "$RESULT_DIR/aggregate.json"
     fi
     return "$driver_exit"
   fi
   chmod 600 "$aggregate_tmp"
+  CAMPAIGN_STATUS="COMPLETED"
+  decorate_v1b3_aggregate "$aggregate_tmp" "$CAMPAIGN_STATUS"
   mv -f -- "$aggregate_tmp" "$RESULT_DIR/aggregate.json"
   rm -f -- "$driver_status"
   if "$SMOKE_ONLY"; then SMOKE_STATUS="SMOKE_PASS"; fi
@@ -359,12 +426,17 @@ measure() {
 
 main() {
   parse_args "$@"
+  configure_campaign
   if "$SMOKE_ONLY" && [[ -z "${AEGIS_V1B2_PROJECT:-}" ]]; then PROJECT="aegis-v1b2-smoke-pilot"; fi
   validate_result_dir
   mark_stage "preflight" "repository_and_host_safety"
   assert_disposable_target
   assert_host_safety
-  write_result aggregate.json "{\"v1_b2_status\":\"NOT_MEASURED\",\"aggregate_only\":true,\"scenarios\":[]}"
+  if [[ "$CAMPAIGN" == "v1-b3" ]]; then
+    write_result aggregate.json "{\"campaign_id\":\"V1-B3\",\"campaign_status\":\"NOT_MEASURED\",\"source_commit\":\"$(git -C "$REPO_ROOT" rev-parse HEAD)\",\"migration_head\":\"0024\",\"workload_profile\":\"V1-B2-UNCHANGED\",\"optimization_under_revalidation\":\"correlation-v2 bulk candidate/member reads\",\"aggregate_only\":true,\"scenarios\":[]}"
+  else
+    write_result aggregate.json "{\"v1_b2_status\":\"NOT_MEASURED\",\"aggregate_only\":true,\"scenarios\":[]}"
+  fi
   if "$PREFLIGHT_ONLY"; then
     command -v docker >/dev/null || fail "Docker CLI is required"
     docker compose version >/dev/null || fail "Docker Compose v2 is required"

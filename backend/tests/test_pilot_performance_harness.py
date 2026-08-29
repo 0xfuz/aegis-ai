@@ -120,3 +120,29 @@ def test_pilot_report_declares_the_fixed_limits_and_non_production_boundary():
         assert phrase in text
     assert "not populated until the harness has run exactly\nonce" in text
     assert "V1-B2 STATUS: BLOCKED" in text
+
+
+def test_v1_b3_campaign_is_isolated_and_inherits_the_exact_v1_b2_workload():
+    text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    assert '--campaign) (($# >= 2)) || fail "--campaign requires v1-b3"' in text
+    assert 'v1-b3)' in text
+    assert 'PROJECT="${AEGIS_V1B3_PROJECT:-$V1B3_PROJECT_DEFAULT}"' in text
+    assert 'aegis-v1b3-pilot-* namespace' in text
+    assert 'V1-B3 requires the complete unchanged V1-B2 workload' in text
+    for bound in ("BASELINE_EVENTS=300", "BASELINE_RATE=5", "BASELINE_CONCURRENCY=5", "BURST_EVENTS=150", "BURST_RATE=10", "BURST_CONCURRENCY=10", "FORWARDER_EVENTS=25"):
+        assert bound in text
+    assert 'WORKLOAD_PROFILE="V1-B2-UNCHANGED"' in text
+    assert 'correlation-v2 bulk candidate/member reads' in text
+    assert '/home/omar/.local/state/aegis-v1b3-performance' in text
+
+
+def test_v1_b3_rejects_v1_b2_results_and_labels_only_its_own_safe_artifacts():
+    text = (ROOT / "scripts/release/run-pilot-performance.sh").read_text(encoding="utf-8")
+    assert 'V1-B3 result directory must not resolve to preserved V1-B2 results' in text
+    assert '*aegis-v1b2-* || "$resolved" == *v1b2-performance*' in text
+    assert '\\"campaign_id\\":\\"$CAMPAIGN_ID\\"' in text
+    assert '\\"campaign_status\\":\\"$CAMPAIGN_STATUS\\"' in text
+    assert '\\"source_commit\\"' in text and '\\"migration_head\\":\\"0024\\"' in text
+    assert 'V1-B3 STATUS: %s' in text
+    assert 'decorate_v1b3_aggregate' in text
+    assert 'No credentials, payloads, response bodies, logs, or environment values are retained.' in text
