@@ -46,11 +46,11 @@ asynchronously by this diagnosis.
 
 ## Reconciled aggregate counts
 
-The per-stage SQL counts reconcile to the pre-existing whole-request diagnostic
-totals: 38 statements for one new event, 53 for exact replay, and 81 for the
-controlled correlation candidate.  `transaction_begin` is the reported
-transaction count; transaction-end callbacks are shown only to check session
-lifecycle balance.
+The per-stage SQL counts reconcile internally to the direct-request aggregate
+counter.  The earlier P1 whole-scenario `correlation_candidate` total includes
+its post-response verification boundary, so it is not a like-for-like request
+total. `transaction_begin` is the reported transaction count;
+transaction-end callbacks are shown only to check session lifecycle balance.
 
 | Scenario | Statements (SELECT / INSERT / UPDATE) | Flush / commit / transaction begin | Elapsed ms |
 | --- | --- | --- | ---: |
@@ -127,3 +127,28 @@ claim.  V1-B3 remains FAILED at 280/300 accepted requests at five events per
 second, and no V1-B2/V1-B3 workload was rerun here.  No production application
 behavior, schema, migration, authority policy, correlation threshold, triage
 rule, AI/provider behavior, R4 resource, or certification tag changed.
+
+## V1-P2B1 appendix — bounded triage materialization result
+
+V1-P2B1 replaces only the assessment path's one CanonicalAlert lookup per
+version-scoped membership with one same-organization bulk alert read.  It does
+not consolidate flushes, commits, or transactions.  The direct PostgreSQL
+query-boundary test remains fixed at three SELECTs (lineage, membership, and
+alert materialization) for 1, 5, and 10 members.
+
+The same three bounded stage-attribution scenarios were run after semantic
+regressions.  The counters below contain request work only and aggregate-safe
+operation counts:
+
+| Scenario | Before direct request | After direct request | Interpretation |
+| --- | --- | --- | --- |
+| `single_new_event` | 38 SQL; 30 SELECT; triage 9 SELECT | 38 SQL; 30 SELECT; triage 9 SELECT | A singleton has one alert, so the bulk read has no count reduction. |
+| `exact_replay` | 53 SQL; 41 SELECT; triage 12 SELECT | 53 SQL; 41 SELECT; triage 12 SELECT | Replay reads existing state and does not run a new assessment. |
+| `correlation_candidate` | 79 SQL; 64 SELECT; triage 19 SELECT | 78 SQL; 63 SELECT; triage 18 SELECT | The two-member assessment removes the repeated alert materialization read. |
+
+The post-change candidate preserves 11 INSERTs, 4 UPDATEs, 13 flushes,
+6 commits, and 8 transaction begins.  Those unchanged linear persistence
+boundaries remain intentionally deferred.  The direct-request candidate total
+is distinct from the P1 whole-scenario value of 81 because that earlier driver
+also counted post-response validation work; neither value is a throughput or
+latency claim.
