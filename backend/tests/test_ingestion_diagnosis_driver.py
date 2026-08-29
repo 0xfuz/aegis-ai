@@ -92,3 +92,27 @@ def test_atomic_private_output_and_rejects_relative_or_symlink_paths(tmp_path):
     linked.symlink_to(target)
     with pytest.raises(ValueError):
         diag._write(str(linked), {})
+
+
+def test_stage_attribution_is_opt_in_aggregate_only_and_uses_the_shared_endpoint_fixture():
+    source = (ROOT / "scripts/release/ingestion_diagnosis_driver.py").read_text()
+    assert "StageAttribution" in source
+    assert 'parser.add_argument("--stage-attribution", action="store_true")' in source
+    assert "counter.install()" in source and "counter.remove()" in source
+    assert 'result["stage_counts"]' in source and 'result["unattributed_select_count"]' in source
+    for forbidden in ("stack", "payload", "secret", "token", "header", "database_url"):
+        assert forbidden not in source[source.index("def _run_stage_attribution"):source.index("def _safe_category")].lower()
+
+
+def test_stage_totals_reconcile_to_the_existing_aggregate_counter_contract():
+    totals = {
+        "select": 30, "insert": 6, "update": 2, "delete": 0, "other": 0,
+        "flush": 7, "commit": 3, "rollback": 0, "transaction_begin": 4,
+        "transaction_end": 11, "refresh": 0,
+    }
+    assert diag._stage_totals_to_aggregate(totals) == {
+        "total_statements": 38, "select_count": 30, "insert_count": 6,
+        "update_count": 2, "delete_count": 0, "other_statement_count": 0,
+        "flush_count": 7, "commit_count": 3, "rollback_count": 0,
+        "transaction_count": 4,
+    }

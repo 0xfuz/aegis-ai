@@ -23,6 +23,7 @@ from tests.support.wazuh_webhook_fixture import (
     create_wazuh_webhook_fixture,
     post_wazuh_webhook_event,
 )
+from tests.support.ingestion_stage_attribution import StageAttribution
 
 SCENARIOS = {
     "single_new_event": 1,
@@ -153,11 +154,50 @@ def _run_endpoint_scenario(scenario: str, session: Session) -> tuple[dict[str, i
     return counter.values, elapsed
 
 
+def _run_stage_attribution(scenario: str, session: Session) -> tuple[dict[str, dict[str, int]], dict[str, int], float]:
+    """Measure only the actual endpoint request after fixture setup."""
+    fixture = create_wazuh_webhook_fixture(session)
+    # The test-only utility listens on SQLAlchemy's Engine event target so it
+    # observes the request session even when TestClient resolves the database
+    # module through a distinct import identity.
+    counter = StageAttribution()
+    bodies = _scenario_bodies(scenario)
+    started = time.monotonic()
+    responses: list[dict[str, Any]] = []
+    try:
+        counter.install()
+        with TestClient(app) as client:
+            responses = [_submit(client, fixture, body) for body in bodies]
+    finally:
+        elapsed = round((time.monotonic() - started) * 1000, 2)
+        counter.remove()
+    if scenario == "correlation_candidate" and any(response.get("correlation_version") != CORRELATION_V2_VERSION for response in responses):
+        raise RuntimeError("DIAGNOSTIC_CORRELATION_NOT_REACHED")
+    return counter.counts, counter.totals(), elapsed
+
+
+def _stage_totals_to_aggregate(totals: dict[str, int]) -> dict[str, int]:
+    """Translate fixed test-only stage counters into the driver contract."""
+    statements = sum(totals[key] for key in ("select", "insert", "update", "delete", "other"))
+    return {
+        "total_statements": statements,
+        "select_count": totals["select"],
+        "insert_count": totals["insert"],
+        "update_count": totals["update"],
+        "delete_count": totals["delete"],
+        "other_statement_count": totals["other"],
+        "flush_count": totals["flush"],
+        "commit_count": totals["commit"],
+        "rollback_count": totals["rollback"],
+        "transaction_count": totals["transaction_begin"],
+    }
+
+
 def _safe_category(exc: Exception) -> str:
     return str(exc) if str(exc) in {"DIAGNOSTIC_HTTP_REJECTED", "DIAGNOSTIC_CORRELATION_NOT_REACHED"} else "DIAGNOSTIC_FAILED"
 
 
-def run(scenario: str) -> dict[str, Any]:
+def run(scenario: str, *, stage_attribution: bool = False) -> dict[str, Any]:
     if scenario not in SCENARIOS:
         raise ValueError("Unsupported diagnostic scenario.")
     session = SessionLocal()
@@ -168,7 +208,13 @@ def run(scenario: str) -> dict[str, Any]:
         "elapsed_milliseconds": 0.0,
     }
     try:
-        counters, elapsed = _run_endpoint_scenario(scenario, session)
+        if stage_attribution:
+            stages, stage_totals, elapsed = _run_stage_attribution(scenario, session)
+            result["stage_counts"] = stages
+            result["unattributed_select_count"] = stages["unattributed"]["select"]
+            counters = _stage_totals_to_aggregate(stage_totals)
+        else:
+            counters, elapsed = _run_endpoint_scenario(scenario, session)
         result.update(counters)
         result["elapsed_milliseconds"] = elapsed
         result["success"] = True
@@ -203,8 +249,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one aggregate-only synthetic ingestion diagnostic scenario.")
     parser.add_argument("--output", required=True)
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
+    parser.add_argument("--stage-attribution", action="store_true")
     args = parser.parse_args(argv)
-    _write(args.output, run(args.scenario))
+    _write(args.output, run(args.scenario, stage_attribution=args.stage_attribution))
     return 0
 
 

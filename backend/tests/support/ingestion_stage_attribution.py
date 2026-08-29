@@ -13,6 +13,7 @@ from time import monotonic
 from typing import Any, Iterator
 
 from sqlalchemy import event
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 STAGES = ("authentication", "raw_event", "canonical_alert", "deduplication", "correlation_v2", "triage", "response_or_framework", "unattributed")
@@ -31,8 +32,12 @@ def classify_frames(frames: list[Any] | None = None) -> str:
 
 
 class StageAttribution:
-    def __init__(self, engine: Any):
-        self.engine, self.installed, self.started = engine, False, 0.0
+    def __init__(self, engine: Any | None = None):
+        # The TestClient application can resolve its database module through a
+        # separate import path from the fixture process.  Listening on the
+        # SQLAlchemy Engine class keeps the diagnostic attached to the actual
+        # request engine while installation still happens after fixture setup.
+        self.engine, self.installed, self.started = Engine, False, 0.0
         self.counts = {stage: {counter: 0 for counter in COUNTERS} for stage in STAGES}
 
     def _stage(self) -> str: return classify_frames()
@@ -61,4 +66,3 @@ class StageAttribution:
         self.installed = False
     def totals(self) -> dict[str, int]: return {counter: sum(row[counter] for row in self.counts.values()) for counter in COUNTERS}
     def reconcile(self, whole: dict[str, int]) -> bool: return all(self.totals()[key] == whole.get(key, 0) for key in COUNTERS)
-
