@@ -21,12 +21,53 @@ this blocker. RC1 remains available only for controlled functional evaluation;
 V1-C and promotion to v1.0.0 remain blocked. No raw payloads, responses,
 credentials, or logs were retained.
 
+## V1-B3 STATUS: FAILED
+
+V1-B3 revalidated the **unchanged** V1-B2 baseline after the bounded
+correlation-v2 bulk candidate/member-read optimization. It ran on branch
+`release-readiness` at source commit `462cb6cc509e75062b4a53addc5452ec1e49a024`,
+with migration head `0024` and workload profile `V1-B2-UNCHANGED`.
+
+The baseline scheduled 300 events at 5 events/second, with concurrency ≤5.
+It recorded 285 HTTP starts, 280 returned and accepted requests, and zero
+rejected/failed returned requests. Fifteen Futures were cancelled before HTTP
+submission and five requests were still running at the deadline; together with
+the 280 accepted requests, those categories account for all 300 scheduled
+Futures. Elapsed time was 78.92 seconds and cleanup completed. The safe failure
+category was `FUTURE_COMPLETION_TIMEOUT`.
+
+This improved the preserved V1-B2 baseline from 206 to 280 accepted requests
+and reduced cancelled-before-start Futures from 89 to 15. It still did **not**
+complete 300/300 at 5 events/second. No complete-workload p50/p95/p99 values
+are reported, no smaller sustained rate was measured, and no supported
+throughput envelope follows from either campaign.
+
+The controlled burst, bounded authenticated reads, 25-event forwarder
+outage/recovery, restart/persistence, and resource-envelope scenarios are
+**NOT RUN** after this baseline failure. V1-C and v1.0.0 remain blocked. This
+result is not a claim of zero event loss, production readiness, complete
+benchmark success, or sufficient optimization for final release.
+
+The original V1-B3 aggregate artifact had a trailing literal `\\n` byte pair
+after its complete JSON document. It was preserved outside the repository as
+evidence and is not treated as a valid campaign aggregate. The aggregate
+finalization correction is separately tested; it does not rewrite the original
+campaign evidence or alter the result above.
+
 This is an operator-run harness checkpoint, not a performance claim. Run it
 from the repository root in a normal local terminal:
 
 ```sh
 ./scripts/release/run-pilot-performance.sh \
   --result-dir /home/omar/.local/state/aegis-v1b2-performance
+```
+
+V1-B3 uses a distinct campaign and result directory, while retaining the exact
+same workload:
+
+```sh
+./scripts/release/run-pilot-performance.sh --campaign v1-b3 \
+  --result-dir /home/omar/.local/state/aegis-v1b3-performance
 ```
 
 Use `--preflight-only` to verify the safe namespace, Docker prerequisite,

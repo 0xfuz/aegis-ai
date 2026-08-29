@@ -12,4 +12,4 @@ Optional local Ollama execution is disabled by default. When deliberately enable
 
 Operators own ingress/TLS, capacity, secret lifecycle, Wazuh installation, spool monitoring, backups, and recovery drills. Aegis is not a SIEM replacement, SaaS, compliance product, universal connector platform, or autonomous remediation system. Findings, MITRE mappings, actions, and promotion remain analyst authority decisions.
 
-Use [backup/restore](BACKUP_AND_RECOVERY.md) and [Wazuh operations](WAZUH_OPERATIONS.md). [V1-B2](V1_0_PILOT_PERFORMANCE.md) is currently blocked by the original local baseline, so it does not supply a supported throughput envelope and final v1.0.0 certification remains blocked.
+Use [backup/restore](BACKUP_AND_RECOVERY.md) and [Wazuh operations](WAZUH_OPERATIONS.md). The preserved V1-B2 baseline and the V1-B3 revalidation in [pilot performance status](V1_0_PILOT_PERFORMANCE.md) did not complete the required 300/300 local workload at 5 events/second. Neither supplies a supported throughput envelope, and final v1.0.0 certification remains blocked.
