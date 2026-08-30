@@ -2,6 +2,10 @@
 .env
 backend/storage/
 .env.local
+.env.production
+.env.*.local
+!.env.example
+!.env.production.example
 
 # Backend
 __pycache__/
@@ -27,6 +31,10 @@ next-env.d.ts
 logs/
 tmp/
 temp/
+runtime-secrets/
+secrets/
+test-results/
+*.junit.xml
 
 # Coverage / reports
 coverage/
@@ -48,6 +56,13 @@ venv/
 *.sqlite3
 *.sql
 *.dump
+
+# Local TLS and operator material (commit only reviewed public examples)
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
 
 # IDE
 .vscode/

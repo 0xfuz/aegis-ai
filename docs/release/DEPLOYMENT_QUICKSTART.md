@@ -1,6 +1,6 @@
 # Core-mode deployment quickstart
 
-This is the supported clean-clone path for a controlled pilot. It starts the private Core stack (PostgreSQL, Redis, migration, API, frontend, worker, and beat) without a Wazuh Manager or Ollama. Wazuh is configured separately; AI execution and Ollama remain disabled unless an operator explicitly enables the documented optional profile.
+This is the supported clean-clone path for a controlled pilot. Core mode starts only PostgreSQL, Redis, migration, API, and frontend. It does not start a Wazuh Manager, Ollama, worker, beat, or AI execution. Wazuh and optional local AI are configured separately after Core mode works.
 
 This guide does not certify a throughput envelope. The unchanged V1-B3 baseline failed to complete 300/300 events at five events per second on its single-machine host. Aegis is suitable for controlled pilot use, not a production-scale SaaS or Enterprise SIEM replacement.
 
@@ -84,15 +84,19 @@ Use the actual absolute runtime paths in `core.env`; do not copy the placeholder
 
 ## Start, bootstrap, and verify
 
-The migration service is the sole writer and reaches head `0024` before API, worker, or beat starts. Core mode does not enable the `ollama` or `bootstrap` profiles during normal startup.
+The migration service is the sole writer and reaches head `0024` before API starts. Core mode does not enable the `ollama` or `bootstrap` profiles during normal startup.
 
 ```sh
 docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
   -f docker-compose.production.yml config -q
 docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
-  -f docker-compose.production.yml up -d --build
+  -f docker-compose.production.yml up -d --build postgres redis
 docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
-  -f docker-compose.production.yml ps
+  -f docker-compose.production.yml up --build migrate
+docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
+  -f docker-compose.production.yml up -d --build api frontend
+docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
+  -f docker-compose.production.yml ps postgres redis migrate api frontend
 curl --fail http://127.0.0.1:18000/api/v1/health
 curl --fail http://127.0.0.1:13000/healthz
 ```
@@ -108,13 +112,65 @@ Open `http://127.0.0.1:13000/login`, sign in with the operator-supplied bootstra
 
 MITRE entries labeled **AI-suggested / not canonical** remain suggestions. Only an analyst review of the canonical MITRE surface can confirm or reject a mapping; an AI suggestion never becomes a fact automatically.
 
+## Status, bounded diagnostics, and recovery
+
+Check only the Core services first:
+
+```sh
+docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
+  -f docker-compose.production.yml ps postgres redis migrate api frontend
+curl --fail http://127.0.0.1:18000/api/v1/health
+curl --fail http://127.0.0.1:13000/healthz
+```
+
+For a bounded service-error view, inspect only the latest lines for the
+affected service. Do not use environment-inspection commands or copy logs into
+tickets because logs can contain operational context.
+
+```sh
+docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
+  -f docker-compose.production.yml logs --tail=50 api frontend
+```
+
+To recover the sole administrator, use the internal, non-HTTP command with its
+non-echoing prompt. It sets a required rotation; it does not create a second
+administrator.
+
+```sh
+docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
+  -f docker-compose.production.yml exec -it api \
+  python -m app.modules.identity.cli.reset_admin_password \
+  --organization-slug YOUR_ORGANIZATION --email ADMIN_EMAIL
+```
+
+After login, use **Settings → Security** for self-service password rotation.
+It requires the current password, clears the browser session after success,
+and requires a new sign-in.
+
+## Troubleshooting
+
+| Symptom | Safe diagnosis | Bounded correction |
+| --- | --- | --- |
+| Secret file missing or invalid permissions | Run `materialize-runtime-secrets.sh --preflight-only`; it reports only a safe category. | Restore the missing protected source file or set directory `0700` and file `0600`; do not put a secret in `core.env`. |
+| A required environment identifier is absent | `docker compose … config -q` fails before startup. | Fill only the placeholder identifier or protected-file path in the external `core.env`. |
+| Loopback port is occupied | API or frontend cannot bind its chosen host port. | Choose unused loopback `API_PORT`/`FRONTEND_PORT` values and keep CORS/public API URLs consistent. |
+| PostgreSQL is not healthy | `docker compose … ps postgres` is not healthy. | Use the bounded `logs --tail=50 postgres`; correct the protected PostgreSQL secret path, then restart only the exact project. |
+| Migration is not at `0024` | `migrate` did not exit successfully. | Inspect `logs --tail=50 migrate`, correct the prerequisite, and rerun the one-shot migration; do not edit the database directly. |
+| API connection reset during startup | API health is temporarily unavailable while dependencies settle. | Recheck the two health endpoints after the Compose health-check window; use bounded API logs if it remains unavailable. |
+| Frontend is healthy but API is unavailable | `/healthz` proves only the Next runtime, not API reachability. | Check API health and ensure `NEXT_PUBLIC_API_URL_REQUIRED`, `PUBLIC_API_BASE_URL_REQUIRED`, and CORS use the same `localhost` or `127.0.0.1` origin. |
+| Bootstrap identity already exists | The bootstrap command fails closed. | Sign in as that administrator or use the documented recovery command; do not rerun bootstrap to create another identity. |
+| Bootstrap password is rejected | The password fails server validation. | Use 12–128 characters meeting at least three required character classes; never pass it as a command argument. |
+| Login requires initial rotation | The bootstrap account intentionally has rotation required. | Complete the authenticated rotation, then sign in again with the new password. |
+| Ollama/model is unavailable | Optional provider readiness is unavailable. | Keep Core mode; enable Ollama only after following the optional profile requirements and confirming the exact pre-existing model. |
+| Wazuh connector or TLS is absent | Core mode has no Wazuh Manager or forwarder configuration. | Follow [Wazuh operations](WAZUH_OPERATIONS.md); do not disable TLS verification or use a demo credential. |
+
 ## Controlled restart and cleanup
 
 For an ordinary restart, preserve named volumes. Stop ingress/forwarding first when configured, then stop worker and beat, API/frontend, Redis, and PostgreSQL last. `stop` and ordinary `down` preserve volumes; never use `down -v`, volume deletion, or Docker prune for an ordinary restart.
 
 ```sh
 docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
-  -f docker-compose.production.yml stop intelligence-worker intelligence-beat api frontend redis postgres
+  -f docker-compose.production.yml stop api frontend redis postgres
 # After a reboot that removes the runtime directory, materialize it again into
 # a fresh empty target. The helper intentionally refuses overwrites.
 if [ ! -e "$AEGIS_RUNTIME_DIR" ]; then
@@ -123,7 +179,7 @@ if [ ! -e "$AEGIS_RUNTIME_DIR" ]; then
     --runtime-dir "$AEGIS_RUNTIME_DIR"
 fi
 docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
-  -f docker-compose.production.yml up -d
+  -f docker-compose.production.yml up -d postgres redis api frontend
 ```
 
 Repeat the two health checks and sign in with the rotated password after the restart. For an intentionally disposable test deployment only, stop the exact project and remove its exact project volumes after confirming no evidence must be preserved:
@@ -132,5 +188,9 @@ Repeat the two health checks and sign in with the rotated password after the res
 docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" \
   -f docker-compose.production.yml down -v --remove-orphans
 ```
+
+Never use that cleanup command for a preserved evaluation, Wazuh evidence, or
+another Compose project. It is only a reset for a newly created disposable
+Core evaluation.
 
 For Wazuh deployment, durable forwarding, TLS lifecycle, backup/restore, and credential rotation, follow [Wazuh operations](WAZUH_OPERATIONS.md), [production deployment](PRODUCTION_DEPLOYMENT.md), [admin bootstrap](PRODUCTION_ADMIN_BOOTSTRAP.md), and [backup and recovery](BACKUP_AND_RECOVERY.md).
