@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api-client";
-import { clearTokens } from "@/lib/api-client";
+import { useAuth } from "@/lib/auth-context";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +34,7 @@ function buildCurlCommand(created: ConnectorCreated): string {
 
 export default function SettingsPage() {
   const router = useRouter();
+  const { clearSession } = useAuth();
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState("");
@@ -89,7 +90,7 @@ export default function SettingsPage() {
     if (newPassword !== confirmPassword) { setRotationError("New passwords do not match."); setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); return; }
     if (newPassword.length < 12 || newPassword.length > 128) { setRotationError("Use a password between 12 and 128 characters."); setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); return; }
     setRotating(true); setRotationError(null);
-    try { await apiFetch("/api/v1/auth/password/rotate", { method: "POST", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }); clearTokens(); setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); router.replace("/login?message=password-changed"); }
+    try { await apiFetch("/api/v1/auth/password/rotate", { method: "POST", body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }); clearSession(); setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); router.replace("/login?message=password-changed"); }
     catch { setRotationError("Unable to change password. Check your current password and try again."); setCurrentPassword(""); setNewPassword(""); setConfirmPassword(""); }
     finally { setRotating(false); }
   }

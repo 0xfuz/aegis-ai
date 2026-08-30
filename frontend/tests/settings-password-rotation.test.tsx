@@ -4,13 +4,17 @@ import SettingsPage from "@/app/(dashboard)/settings/page";
 
 const state = vi.hoisted(() => ({ api: vi.fn(), clear: vi.fn(), replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: state.replace }) }));
+vi.mock("@/lib/auth-context", () => ({
+  useAuth: () => ({
+    clearSession: () => {
+      state.clear();
+      localStorage.removeItem("aegis_access_token");
+      localStorage.removeItem("aegis_refresh_token");
+    },
+  }),
+}));
 vi.mock("@/lib/api-client", () => ({
   apiFetch: state.api,
-  clearTokens: () => {
-    state.clear();
-    localStorage.removeItem("aegis_access_token");
-    localStorage.removeItem("aegis_refresh_token");
-  },
   ApiError: class ApiError extends Error {},
 }));
 

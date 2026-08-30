@@ -10,7 +10,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 function AuthProbe() {
-  const { isLoading, login, user } = useAuth();
+  const { clearSession, isLoading, login, user } = useAuth();
   const [error, setError] = useState<string | null>(null);
   return (
     <section>
@@ -20,6 +20,7 @@ function AuthProbe() {
       <button onClick={() => { void login("operator@example.invalid", "synthetic-password").catch(() => setError("failed")); }}>
         Sign in
       </button>
+      <button onClick={clearSession}>Clear session</button>
     </section>
   );
 }
@@ -87,5 +88,22 @@ describe("production login response contract", () => {
     expect(screen.getByTestId("principal")).toHaveTextContent("anonymous");
     expect(localStorage.getItem("aegis_access_token")).toBeNull();
     expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("clears the in-memory principal and browser credentials without another auth request", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(currentLoginResponse), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(currentPrincipal), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AuthProvider><AuthProbe /></AuthProvider>);
+    await waitFor(() => expect(screen.getByTestId("loading")).toHaveTextContent("false"));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(screen.getByTestId("principal")).toHaveTextContent("authenticated"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear session" }));
+    expect(screen.getByTestId("principal")).toHaveTextContent("anonymous");
+    expect(localStorage.getItem("aegis_access_token")).toBeNull();
+    expect(localStorage.getItem("aegis_refresh_token")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
