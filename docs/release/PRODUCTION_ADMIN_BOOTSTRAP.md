@@ -68,3 +68,14 @@ verification.
 Existing users are not reinterpreted: migration `0024` defaults
 `must_rotate_password` to `false`. This command is not a general user-creation
 or password-reset interface.
+# Operator password recovery
+
+Recovery is internal-only and has no HTTP endpoint:
+
+```bash
+python -m app.modules.identity.cli.reset_admin_password \
+  --organization-slug YOUR_ORGANIZATION --email ADMIN_EMAIL \
+  --password-file /protected/recovery/new-password
+```
+
+Without `--password-file`, the command requests and confirms a non-echoing password. It runs only with `ENVIRONMENT=production`, `DEBUG=false`, and demo seeding disabled; password arguments and password environment variables are intentionally unsupported. The target must be exactly one active administrator in the named organization. Recovery sets `must_rotate_password=true` and records only safe operator audit metadata. Rotate the JWT signing secret through the supported credential-rotation procedure before or with recovery to invalidate existing sessions.

@@ -60,6 +60,16 @@ class InvestigationService:
             raise NotFoundError("Investigation not found.")
         return investigation
 
+    def mitre_suggestions(self, org_id: UUID, investigation_id: UUID) -> dict:
+        """Read only persisted legacy/AI suggestion IDs; never creates mappings."""
+        from app.modules.investigations.domain.mitre_catalog import MITRE_CATALOG_VERSION, technique_name
+        investigation = self.get_investigation(org_id, investigation_id)
+        identifiers = sorted({value for value in (investigation.mitre_techniques or []) if isinstance(value, str) and 1 <= len(value) <= 20})[:25]
+        return {"catalog_version": MITRE_CATALOG_VERSION, "items": [
+            {"technique_id": value, "technique_name": technique_name(value), "origin": "AI_SUGGESTION", "review_state": "SUGGESTED"}
+            for value in identifiers
+        ]}
+
     def overview(self, org_id: UUID, investigation_id: UUID) -> dict:
         """Return one deterministic, aggregate-only workspace projection.
 

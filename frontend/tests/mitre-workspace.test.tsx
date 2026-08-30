@@ -12,10 +12,19 @@ vi.mock("@/lib/auth-context", () => ({ useAuth: () => ({ user: state.active ? { 
 const mapping = (id: string, status: "PROPOSED" | "CONFIRMED" | "REJECTED" = "PROPOSED", technique = "T1059") => ({ id, technique_id: technique, technique_name: "<img src=x onerror=alert(1)>", tactic: "execution", status, confidence: 72, review_rationale: null, created_at: "2026-01-01T00:00:00Z", reviewed_at: null, provenance: { available: true, omitted: 0 }, fact_links: [{ fact_id: "event-1", fact_type: "EVENT", role: "CONTEXT" }] });
 const page = (items = [mapping("m-1")], offset = 0, total = items.length, limit = 25) => ({ items, offset, total, limit, returned_count: items.length });
 
-beforeEach(() => { state.api.mockReset(); state.replace.mockReset(); state.search = ""; state.permissions = ["investigation:read", "investigation:write"]; state.active = true; });
+beforeEach(() => { state.api.mockReset(); state.api.mockResolvedValue({ items: [] }); state.replace.mockReset(); state.search = ""; state.permissions = ["investigation:read", "investigation:write"]; state.active = true; });
 afterEach(cleanup);
 
 describe("MitreWorkspace", () => {
+  it("keeps AI suggestions separate from a zero canonical mapping page", async () => {
+    state.api.mockResolvedValueOnce(page([])).mockResolvedValueOnce({ catalog_version: "enterprise-attack-v14.1-display-subset", items: [{ technique_id: "T1110", technique_name: "Brute Force", origin: "AI_SUGGESTION", review_state: "SUGGESTED" }, { technique_id: "T1078", technique_name: "Valid Accounts", origin: "AI_SUGGESTION", review_state: "SUGGESTED" }] });
+    render(<MitreWorkspace id="case-1" />);
+    expect(await screen.findByRole("heading", { name: "No MITRE mappings" })).toBeVisible();
+    expect(await screen.findByText(/T1110 — Brute Force/)).toBeVisible();
+    expect(screen.getByText(/T1078 — Valid Accounts/)).toBeVisible();
+    expect(state.api).toHaveBeenCalledWith("/api/v1/investigations/case-1/mitre-suggestions", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+  });
   it("uses only the bounded MITRE route, preserves server order, and renders hostile text inertly", async () => {
     state.api.mockResolvedValue(page([mapping("m-2", "CONFIRMED", "T1003"), mapping("m-1", "PROPOSED", "T1059")]));
     render(<MitreWorkspace id="case 1" />);

@@ -27,3 +27,10 @@ Production secrets are file-mounted. Intelligence execution is optional and disa
 - Wazuh durable spool/retry/quarantine and TLS-verified forwarding.
 
 See [release scope](docs/release/V1_0_RELEASE.md), [pilot performance status](docs/release/V1_0_PILOT_PERFORMANCE.md), [changelog](CHANGELOG.md), [security policy](SECURITY.md), [license](LICENSE), [notice](NOTICE), [launch drafts](docs/release/LAUNCH_POSTS.md), and [RC1 certification](docs/release/RC1_B_LIVE_CERTIFICATION.md). Final v1.0.0 remains blocked: neither the preserved V1-B2 baseline nor V1-B3 revalidation completed the required 300/300 workload at 5 events/second.
+# Controlled pilot operations
+
+Aegis AI is a self-hosted alert-intelligence and investigation platform for controlled pilot use, validated with Wazuh. It is not an enterprise SIEM replacement, compliance certification, or a certified throughput envelope. The V1-B3 local campaign accepted 280 of 300 returned workload requests at 5 events/second and did not complete its required workload; see [the pilot performance report](docs/release/V1_0_PILOT_PERFORMANCE.md).
+
+Production operators bootstrap one administrator using the internal CLI, sign in, and complete the required first-login password rotation. For recovery, use `python -m app.modules.identity.cli.reset_admin_password --organization-slug … --email …` with a protected file or non-echoing prompt, then follow the documented JWT rotation procedure to invalidate existing sessions. See [production admin bootstrap](docs/release/PRODUCTION_ADMIN_BOOTSTRAP.md) and [runtime secret materialization](docs/release/RUNTIME_SECRET_MATERIALIZATION.md).
+
+AI-suggested MITRE techniques are advisory only. Canonical MITRE mappings require analyst recording and confirmation; only confirmed mappings can participate in deterministic reconstruction.

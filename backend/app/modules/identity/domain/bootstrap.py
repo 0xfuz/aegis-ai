@@ -6,6 +6,7 @@ import re
 from uuid import UUID
 
 from pydantic import EmailStr, TypeAdapter, ValidationError as PydanticValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -14,7 +15,7 @@ from app.modules.evidence.infrastructure.models import AuditEvent
 from app.modules.identity.infrastructure.models import Organization, Permission, Role, User
 from app.modules.identity.infrastructure.repository import OrganizationRepository, UserRepository
 from app.seed.seed_data import PERMISSIONS, ROLES
-from app.shared.exceptions import ConflictError, ValidationError
+from app.shared.exceptions import ConflictError, NotFoundError, ValidationError
 
 _DEFAULT_EMAILS = {"admin@aegis.demo"}
 _DEFAULT_PASSWORDS = {"changeme123!", "aegis_dev_password", "change_me_dev_only_insecure_secret", "password", "password123", "admin"}
@@ -94,3 +95,50 @@ class ProductionAdminBootstrapService:
         except Exception:
             self.db.rollback()
             raise ValidationError("Bootstrap could not be completed.") from None
+
+
+class ProductionAdminPasswordRecoveryService:
+    """Internal operator recovery boundary; plaintext never leaves the caller."""
+
+    def __init__(self, db: Session, *, environment: str, demo_seed_enabled: bool):
+        self.db, self.environment, self.demo_seed_enabled = db, environment.casefold(), demo_seed_enabled
+
+    def reset(self, *, organization_slug: str, email: str, password: str) -> UUID:
+        if self.environment != "production" or self.demo_seed_enabled:
+            raise ValidationError("Production recovery configuration is invalid.")
+        normalized_email = _normalize_bootstrap_email(email)
+        normalized_slug = organization_slug.strip().casefold()
+        if not normalized_email or normalized_email in _DEFAULT_EMAILS or not _SLUG.fullmatch(normalized_slug):
+            raise ValidationError("Recovery identity is invalid.")
+        validate_bootstrap_password(password)
+        try:
+            organization = self.db.scalar(select(Organization).where(Organization.slug == normalized_slug))
+            if organization is None:
+                raise NotFoundError("Administrator not found.")
+            users = list(self.db.scalars(
+                select(User).join(Role).where(
+                    User.org_id == organization.id,
+                    User.email == normalized_email,
+                    User.is_active.is_(True),
+                    Role.name == "admin",
+                )
+            ))
+            if len(users) != 1:
+                raise NotFoundError("Administrator not found.")
+            user = users[0]
+            user.hashed_password = hash_password(password)
+            user.must_rotate_password = True
+            self.db.add(AuditEvent(
+                org_id=organization.id, investigation_id=None, actor_id=None,
+                actor_type="operator", action="OPERATOR_ADMIN_PASSWORD_RESET",
+                target_type="User", target_id=user.id, occurred_at=datetime.now(timezone.utc),
+                metadata_={"password_rotation_required": True},
+            ))
+            self.db.commit()
+            return user.id
+        except (NotFoundError, ValidationError):
+            self.db.rollback()
+            raise
+        except Exception:
+            self.db.rollback()
+            raise ValidationError("Administrator recovery could not be completed.") from None

@@ -139,6 +139,18 @@ class InvestigationOverview(BaseModel):
     counts: InvestigationOverviewCounts
 
 
+class MitreSuggestionRead(BaseModel):
+    technique_id: str = Field(max_length=20)
+    technique_name: str | None = Field(default=None, max_length=255)
+    origin: str = "AI_SUGGESTION"
+    review_state: str = "SUGGESTED"
+
+
+class MitreSuggestionPage(BaseModel):
+    catalog_version: str
+    items: list[MitreSuggestionRead] = Field(max_length=25)
+
+
 class InvestigationDetail(BaseModel):
     """Full shape for the Investigation Workspace."""
 

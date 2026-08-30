@@ -88,3 +88,6 @@ for the mandatory first-login rotation flow.
 No database, Redis, worker, migration, beat, or Ollama port is published to
 the host. API and frontend bind to loopback by default. Do not expose either
 without an authenticated, TLS-terminating reverse proxy and restricted CORS.
+# Restart secret files
+
+Before a host reboot recovery, follow [runtime secret materialization](RUNTIME_SECRET_MATERIALIZATION.md). It restores only protected bind files; it does not generate or replace production credentials.

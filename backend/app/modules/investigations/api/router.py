@@ -21,6 +21,7 @@ from app.modules.investigations.api.schemas import (
     NoteRead,
     NotePage,
     AuditEventPage,
+    MitreSuggestionPage,
 )
 from app.modules.identity.infrastructure.models import User
 from app.modules.investigations.domain.service import InvestigationService, IOCService
@@ -113,6 +114,16 @@ def mitre(
     db: Session = Depends(get_db),
 ):
     return _mitre_page(investigation_id, request, status, limit, offset, principal, db)
+
+
+@router.get("/{investigation_id}/mitre-suggestions", response_model=MitreSuggestionPage)
+def mitre_suggestions(
+    investigation_id: UUID,
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+) -> MitreSuggestionPage:
+    _active_principal_or_404(principal, db)
+    return MitreSuggestionPage.model_validate(InvestigationService(db).mitre_suggestions(principal.org_id, investigation_id))
 
 
 # Compatibility read route retained for the legacy workspace. New consumers
