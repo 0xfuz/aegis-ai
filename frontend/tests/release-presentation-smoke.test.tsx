@@ -9,7 +9,7 @@ import { WorkspaceNav } from "@/components/investigations/workspace-nav";
 
 const state = vi.hoisted(() => ({ pathname: "/dashboard", permissions: ["investigation:read", "assets:read", "threat_intel:read"] }));
 
-vi.mock("next/navigation", () => ({ usePathname: () => state.pathname }));
+vi.mock("next/navigation", () => ({ usePathname: () => state.pathname, useSearchParams: () => new URLSearchParams() }));
 vi.mock("next/link", () => ({ default: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a> }));
 vi.mock("@/lib/auth-context", () => ({ useAuth: () => ({ user: { full_name: "Release administrator", role: { name: "admin" } }, hasPermission: (permission: string) => state.permissions.includes(permission) }) }));
 vi.mock("@/lib/api-client", () => ({ apiFetch: vi.fn().mockResolvedValue({ open_investigations: 0 }) }));

@@ -1,13 +1,23 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { ApiError } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const { login } = useAuth();
+  const search = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +52,7 @@ export default function LoginPage() {
           onSubmit={handleSubmit}
           className="rounded-card border border-hairline bg-surface p-6"
         >
+          {search.get("message") === "password-changed" && <p role="status" className="mb-4 rounded border border-signal/40 bg-signal/10 px-3 py-2 text-sm text-signal">Password changed successfully. Sign in again.</p>}
           {error && (
             <div className="mb-4 rounded border border-severity-critical/40 bg-severity-critical/10 px-3 py-2 text-sm text-severity-critical">
               {error}
