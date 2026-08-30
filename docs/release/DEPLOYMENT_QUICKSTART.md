@@ -49,6 +49,13 @@ unset AEGIS_BOOTSTRAP_PASSWORD
 chmod 0600 "$AEGIS_STATE_DIR/secrets"/*
 ```
 
+`BOOTSTRAP_ADMIN_EMAIL_REQUIRED` in `core.env` is the single authoritative
+bootstrap-email input consumed by production Compose. Set it to the same email
+entered above. The materialization helper currently requires a matching
+`bootstrap_email` file in its fixed allowlist even though Compose does not
+mount that file; this is a known minor evaluator friction, not a second
+identity authority. Do not enter two different emails.
+
 Materialize the fixed secret-file allowlist into a fresh runtime directory. The helper refuses broad paths, symlinks, unsafe modes, missing files, and overwrites; it never prints or generates credentials.
 
 ```sh
@@ -193,4 +200,11 @@ Never use that cleanup command for a preserved evaluation, Wazuh evidence, or
 another Compose project. It is only a reset for a newly created disposable
 Core evaluation.
 
-For Wazuh deployment, durable forwarding, TLS lifecycle, backup/restore, and credential rotation, follow [Wazuh operations](WAZUH_OPERATIONS.md), [production deployment](PRODUCTION_DEPLOYMENT.md), [admin bootstrap](PRODUCTION_ADMIN_BOOTSTRAP.md), and [backup and recovery](BACKUP_AND_RECOVERY.md).
+Both optional paths begin only after the Core health checks above succeed. For
+an evaluator-owned local provider walkthrough, follow the [local AI evaluator
+guide](LOCAL_AI_EVALUATOR_GUIDE.md). For authenticated connector creation,
+private TLS, durable forwarding, and the bounded Wazuh 4.9.2 demonstration,
+follow the [Wazuh evaluator guide](WAZUH_EVALUATOR_GUIDE.md). For deeper
+operations, use [Wazuh operations](WAZUH_OPERATIONS.md), [production
+deployment](PRODUCTION_DEPLOYMENT.md), [admin bootstrap](PRODUCTION_ADMIN_BOOTSTRAP.md),
+and [backup and recovery](BACKUP_AND_RECOVERY.md).

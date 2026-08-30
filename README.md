@@ -9,10 +9,10 @@ The current candidate is `v1.0.0-rc1`. It is not a final v1.0.0 announcement. Th
 | Path | Starts | Use it when |
 | --- | --- | --- |
 | **Quick evaluation — Core mode** | PostgreSQL, Redis, migration, API, and frontend | You want to assess the product without a Wazuh Manager, Ollama, worker, or AI execution. |
-| **Full Wazuh integration** | Core mode plus the separately configured authenticated TLS forwarder and Wazuh Manager integration | You are evaluating the only end-to-end validated external integration. |
-| **Local AI evaluation** | Explicitly enabled Ollama profile and bounded intelligence worker execution | You have completed Core mode and deliberately want reviewable AI suggestions. |
+| **Full Wazuh integration** | Core mode plus the separately configured authenticated TLS forwarder and Wazuh Manager integration | You are evaluating the only end-to-end validated external integration; start from the [Wazuh evaluator guide](docs/release/WAZUH_EVALUATOR_GUIDE.md). |
+| **Local AI evaluation** | Explicitly enabled Ollama profile and bounded intelligence worker execution | You have completed Core mode and deliberately want reviewable AI suggestions; start from the [local AI evaluator guide](docs/release/LOCAL_AI_EVALUATOR_GUIDE.md). |
 
-Start with the copy/paste-friendly [Core-mode quickstart](docs/release/DEPLOYMENT_QUICKSTART.md). See the [private evaluator checklist](docs/release/PRIVATE_EVALUATOR_CHECKLIST.md) before sharing access with a verified reviewer, and the [architecture overview](docs/ARCHITECTURE.md) for system boundaries.
+Start with the copy/paste-friendly [Core-mode quickstart](docs/release/DEPLOYMENT_QUICKSTART.md). Both optional paths require a healthy Core installation first. See the [private evaluator checklist](docs/release/PRIVATE_EVALUATOR_CHECKLIST.md) before sharing access with a verified reviewer, and the [architecture overview](docs/ARCHITECTURE.md) for system boundaries.
 
 ## Prerequisites
 

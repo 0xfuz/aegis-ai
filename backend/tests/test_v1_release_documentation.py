@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_v1_documents_are_present_truthful_and_safe():
-    required = ["README.md", "LICENSE", "NOTICE", "CHANGELOG.md", "CONTRIBUTING.md", "docs/ARCHITECTURE.md", "docs/release/V1_0_RELEASE.md", "docs/release/DEPLOYMENT_QUICKSTART.md", "docs/release/PRIVATE_EVALUATOR_CHECKLIST.md", "docs/release/LAUNCH_POSTS.md"]
+    required = ["README.md", "LICENSE", "NOTICE", "CHANGELOG.md", "CONTRIBUTING.md", "docs/ARCHITECTURE.md", "docs/release/V1_0_RELEASE.md", "docs/release/DEPLOYMENT_QUICKSTART.md", "docs/release/LOCAL_AI_EVALUATOR_GUIDE.md", "docs/release/WAZUH_EVALUATOR_GUIDE.md", "docs/release/PRIVATE_EVALUATOR_CHECKLIST.md", "docs/release/LAUNCH_POSTS.md"]
     for path in required:
         assert (ROOT / path).is_file()
     readme = (ROOT / "README.md").read_text()
@@ -24,7 +24,7 @@ def test_v1_documents_are_present_truthful_and_safe():
 
 
 def test_release_docs_do_not_expose_runtime_markers():
-    text = "\n".join((ROOT / path).read_text() for path in ["README.md", "CHANGELOG.md", "CONTRIBUTING.md", "docs/ARCHITECTURE.md", "docs/release/V1_0_RELEASE.md", "docs/release/DEPLOYMENT_QUICKSTART.md", "docs/release/PRIVATE_EVALUATOR_CHECKLIST.md", "docs/release/LAUNCH_POSTS.md"])
+    text = "\n".join((ROOT / path).read_text() for path in ["README.md", "CHANGELOG.md", "CONTRIBUTING.md", "docs/ARCHITECTURE.md", "docs/release/V1_0_RELEASE.md", "docs/release/DEPLOYMENT_QUICKSTART.md", "docs/release/LOCAL_AI_EVALUATOR_GUIDE.md", "docs/release/WAZUH_EVALUATOR_GUIDE.md", "docs/release/PRIVATE_EVALUATOR_CHECKLIST.md", "docs/release/LAUNCH_POSTS.md"])
     for marker in ("/tmp/aegis-r4", "aegis-r4-", "BEGIN PRIVATE KEY", "ChangeMe123!"):
         assert marker not in text
 
@@ -58,6 +58,33 @@ def test_root_ignore_rules_exclude_operator_material_and_keep_safe_examples():
         assert phrase in ignore
     for phrase in (".env.production", "runtime-secrets/", "secrets/", "*.pem", "*.key", "test-results/"):
         assert phrase in dockerignore
+
+
+def test_optional_evaluator_guides_reuse_bounded_existing_contracts_only():
+    readme = (ROOT / "README.md").read_text()
+    quickstart = (ROOT / "docs/release/DEPLOYMENT_QUICKSTART.md").read_text()
+    ai_guide = (ROOT / "docs/release/LOCAL_AI_EVALUATOR_GUIDE.md").read_text()
+    wazuh_guide = (ROOT / "docs/release/WAZUH_EVALUATOR_GUIDE.md").read_text()
+    compose = (ROOT / "docker-compose.production.yml").read_text()
+
+    assert "LOCAL_AI_EVALUATOR_GUIDE.md" in readme
+    assert "WAZUH_EVALUATOR_GUIDE.md" in readme
+    assert "LOCAL_AI_EVALUATOR_GUIDE.md" in quickstart
+    assert "WAZUH_EVALUATOR_GUIDE.md" in quickstart
+    for flag in ("INTELLIGENCE_EXECUTION_ENABLED", "INTELLIGENCE_DISPATCH_ENABLED", "INTELLIGENCE_PROVIDER_ENABLED"):
+        assert f"{flag}=true" in ai_guide
+        assert f"{flag}: ${{{flag}:-false}}" in compose
+    assert "llama3.2:latest" in ai_guide
+    assert "--profile ollama" in ai_guide
+    assert "Claims are not FACTs" in ai_guide
+    assert "POST /api/v1/connectors/webhook" in wazuh_guide
+    assert "settings:manage_connectors" in wazuh_guide
+    assert "AEGIS_WAZUH_VERIFY_TLS=true" in wazuh_guide
+    for prohibited in ("AEGIS_WAZUH_VERIFY_TLS=false", "down -v", "docker system prune", "ChangeMe123!", "admin@r4.example.com", "ollama pull"):
+        assert prohibited not in ai_guide + wazuh_guide
+    for phrase in ("documentation only", "owner walkthrough remains required"):
+        assert phrase in ai_guide
+    assert "documentation only" in wazuh_guide
 
 
 def test_v1_b3_failure_record_is_truthful_and_excludes_a_throughput_claim():
