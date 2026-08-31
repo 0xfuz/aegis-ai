@@ -1,4 +1,5 @@
 import re
+import struct
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -94,3 +95,35 @@ def test_v1_b3_failure_record_is_truthful_and_excludes_a_throughput_claim():
     assert re.search(r"Fifteen Futures were\s+cancelled", text)
     assert "No complete-workload p50/p95/p99 values" in text
     assert "no supported\nthroughput envelope" in text
+
+
+def test_readme_visual_walkthrough_uses_only_sanitized_repository_assets():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    asset_paths = [
+        "docs/assets/branding/aegis-ai-logo.png",
+        "docs/assets/screenshots/overview.png",
+        "docs/assets/screenshots/evidence.png",
+        "docs/assets/screenshots/timeline.png",
+        "docs/assets/screenshots/attack-graph.png",
+        "docs/assets/screenshots/audit-trail.png",
+    ]
+    for path in asset_paths:
+        data = (ROOT / path).read_bytes()
+        assert data.startswith(b"\x89PNG\r\n\x1a\n")
+        width, height = struct.unpack(">II", data[16:24])
+        assert width > 0 and height > 0
+        assert path in readme
+
+    headings = [
+        "## Product walkthrough",
+        "### 1. Investigation Overview",
+        "### 2. Evidence",
+        "### 3. Timeline",
+        "### 4. Attack Graph",
+        "### 5. Audit Trail",
+    ]
+    assert [readme.index(heading) for heading in headings] == sorted(readme.index(heading) for heading in headings)
+    assert '<img src="docs/assets/branding/aegis-ai-logo.png" alt="Aegis AI" width="420">' in readme
+    assert "does not recalculate correlation, triage, or AI conclusions" in readme
+    assert "never upgrades AI suggestions into facts" in readme
+    assert "/home/omar/" not in readme

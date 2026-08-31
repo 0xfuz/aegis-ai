@@ -1,8 +1,59 @@
-# Aegis AI
+<p align="center">
+  <img src="docs/assets/branding/aegis-ai-logo.png" alt="Aegis AI" width="420">
+</p>
 
-Aegis AI is an independent personal project: a self-hosted security-alert intelligence and investigation platform for controlled self-hosted pilot use. It is intended for controlled pilot use, not a public service. It is not an official Wazuh product and is not affiliated with Wazuh. Wazuh 4.9.2 is the only external integration validated end-to-end.
+<h1 align="center">Aegis AI</h1>
+
+<p align="center">A self-hosted, evidence-first investigation and decision layer for security telemetry.</p>
+
+Aegis AI sits above telemetry sources such as Wazuh. It turns authorized input into durable investigation context: evidence provenance, canonical alerts, explainable reconstruction, and analyst-controlled decisions. It is intended for controlled pilot use, not a public service. The boundaries are deliberate: correlation and triage are persisted rather than recomputed in the browser, and AI output remains a reviewable suggestion rather than security authority.
+
+> **Independent project notice:** Aegis AI is an independent personal project. It is not an official Wazuh product and is not affiliated with Wazuh. Wazuh 4.9.2 is the only external integration validated end-to-end.
 
 The current candidate is `v1.0.0-rc1`. It is not a final v1.0.0 announcement. The preserved V1-B3 single-machine revalidation accepted 280 of 300 returned workload requests at five events per second and did not complete the required workload. No throughput envelope, production-scale, Enterprise, high-availability, SaaS, or compliance claim is made.
+
+## Product walkthrough
+
+### 1. Investigation Overview
+
+![Investigation Overview showing persisted record counts and an authoritative summary](docs/assets/screenshots/overview.png)
+
+*Persisted investigation counts and authoritative record summary.* The Overview summarizes stored Investigation records; it does not recalculate correlation, triage, or AI conclusions.
+
+### 2. Evidence
+
+![Evidence inventory showing parse status, derived records, provenance, and controlled download access](docs/assets/screenshots/evidence.png)
+
+*Authorized evidence inventory with parse status and derived records.* Evidence metadata, parsing state, derived counts, provenance, and download access are bounded by the authorized evidence workflow.
+
+### 3. Timeline
+
+![Canonical Timeline showing server-authoritative source-time order and bounded provenance workflow](docs/assets/screenshots/timeline.png)
+
+*Server-authoritative timeline with bounded provenance inspection.* Normalized events retain the server's source-time order and link back to the authorized evidence workflow.
+
+### 4. Attack Graph
+
+![Canonical Attack Graph showing factual entity and occurrence-backed indicator nodes with persisted relationships](docs/assets/screenshots/attack-graph.png)
+
+*Canonical factual graph with persisted relationships and bounded provenance.* The graph displays factual entity nodes, occurrence-backed indicators, and persisted directional relationships. It never upgrades AI suggestions into facts.
+
+### 5. Audit Trail
+
+![Audit Trail showing chronological actors, targets, and safe state transitions](docs/assets/screenshots/audit-trail.png)
+
+*Chronological audit events with recorded actors, targets, and safe transitions.* A queued Intelligence Run can, for example, move safely to cancelled; the record remains an audit event rather than a claim of completed AI analysis.
+
+## What the product preserves
+
+- **Evidence and provenance:** authorized evidence metadata and controlled access stay linked to the Investigation workflow.
+- **Canonical alerts:** normalized alerts use deterministic deduplication, then correlation-v2 stores its reasons with the resulting membership. Triage is persisted state, not a client-side calculation.
+- **Analyst authority:** analysts control Investigation promotion, Findings, canonical MITRE mappings, and actions. Findings and MITRE mappings are separately reviewed.
+- **Factual workspaces:** Timeline, Entities, Indicators, and the Attack Graph present bounded persisted records and relationships.
+- **Reports and audit:** per-Investigation reports use authoritative records, and chronological audit events retain actors, targets, and safe transitions.
+- **Optional AI:** bounded local AI execution can produce reviewable, citation-linked claims. Claims cannot rewrite canonical facts or automatically create Findings, MITRE mappings, or actions.
+
+Core mode works without Wazuh and without Ollama. Wazuh and local Ollama remain optional evaluator paths after a healthy Core installation.
 
 ## Choose your path
 
@@ -12,7 +63,18 @@ The current candidate is `v1.0.0-rc1`. It is not a final v1.0.0 announcement. Th
 | **Full Wazuh integration** | Core mode plus the separately configured authenticated TLS forwarder and Wazuh Manager integration | You are evaluating the only end-to-end validated external integration; start from the [Wazuh evaluator guide](docs/release/WAZUH_EVALUATOR_GUIDE.md). |
 | **Local AI evaluation** | Explicitly enabled Ollama profile and bounded intelligence worker execution | You have completed Core mode and deliberately want reviewable AI suggestions; start from the [local AI evaluator guide](docs/release/LOCAL_AI_EVALUATOR_GUIDE.md). |
 
-Start with the copy/paste-friendly [Core-mode quickstart](docs/release/DEPLOYMENT_QUICKSTART.md). Both optional paths require a healthy Core installation first. See the [private evaluator checklist](docs/release/PRIVATE_EVALUATOR_CHECKLIST.md) before sharing access with a verified reviewer, and the [architecture overview](docs/ARCHITECTURE.md) for system boundaries.
+## Documentation
+
+- [Core deployment quickstart](docs/release/DEPLOYMENT_QUICKSTART.md)
+- [Private evaluator checklist](docs/release/PRIVATE_EVALUATOR_CHECKLIST.md)
+- [Architecture overview](docs/ARCHITECTURE.md)
+- [Local AI evaluator guide](docs/release/LOCAL_AI_EVALUATOR_GUIDE.md)
+- [Wazuh evaluator guide](docs/release/WAZUH_EVALUATOR_GUIDE.md)
+- [Production administrator bootstrap and recovery](docs/release/PRODUCTION_ADMIN_BOOTSTRAP.md)
+- [Backup and recovery](docs/release/BACKUP_AND_RECOVERY.md)
+- [Contributing](CONTRIBUTING.md)
+
+Both optional paths require a healthy Core installation first.
 
 ## Prerequisites
 

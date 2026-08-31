@@ -14,8 +14,8 @@ download a model, create demo data, or change an Investigation's authority.
   the documented 2 GiB `MemAvailable` and 15 GiB free-disk safety floors; they
   are not a capacity guarantee. The optional Ollama model volume needs
   separately planned local capacity.
-- The model must already be present in the Compose Ollama volume. **Do not run
-  `ollama pull`, download a model, or substitute a model during evaluation.**
+- The model must already be present in the Compose Ollama volume. **Do not
+  download or substitute a model during evaluation.**
 
 Previously certified R4 behavior established bounded local-provider readiness
 and analyst-reviewed claim handling. This guide is documentation only; an
@@ -77,8 +77,8 @@ ingest request.
 3. On completion, select the completed run and inspect only its typed
    citations and reviewable claims. A failed latest run does not hide an older
    selected completed run.
-4. Review a claim only through the existing analyst review control. Claims are
-   not FACTs and never automatically create Findings, canonical MITRE mappings,
+4. Review a claim only through the existing analyst review control. Claims are not FACTs and never
+   automatically create Findings, canonical MITRE mappings,
    promotions, or actions.
 
 Do not paste prompts, evidence, provider output, credentials, or run tokens
@@ -105,5 +105,7 @@ docker compose --project-name aegis-core --env-file "$AEGIS_STATE_DIR/core.env" 
   -f docker-compose.production.yml up -d --build api frontend
 ```
 
-Do not use `down -v`, delete the Ollama model volume, remove PostgreSQL/Redis,
-or alter evidence or secret files when returning to Core mode.
+Do not combine the Compose shutdown operation with the volume-removal flag
+(`-v`); doing so removes named volumes. Do not delete the Ollama model volume,
+remove PostgreSQL/Redis, or alter evidence or secret files when returning to
+Core mode.
