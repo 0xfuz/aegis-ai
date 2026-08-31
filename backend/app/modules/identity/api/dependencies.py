@@ -26,6 +26,7 @@ class Principal:
     org_id: UUID
     role: str
     permissions: frozenset[str]
+    password_rotation_required: bool
 
     def has_permission(self, code: str) -> bool:
         return code in self.permissions
@@ -51,13 +52,20 @@ def get_current_principal(
         org_id=UUID(payload.org_id),
         role=payload.role,
         permissions=frozenset(payload.permissions),
+        password_rotation_required=payload.password_rotation_required,
     )
+
+
+def require_password_rotation_complete(principal: Principal = Depends(get_current_principal)) -> Principal:
+    if principal.password_rotation_required:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Password rotation is required before privileged access.")
+    return principal
 
 
 def require_permission(permission_code: str):
     """Usage: `Depends(require_permission("investigation:approve_remediation"))`"""
 
-    def _check(principal: Principal = Depends(get_current_principal)) -> Principal:
+    def _check(principal: Principal = Depends(require_password_rotation_complete)) -> Principal:
         if not principal.has_permission(permission_code):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -72,7 +80,7 @@ def require_any_role(*role_names: str):
     """Coarser guard for pages that gate on role rather than a specific
     permission (e.g. the User Management page is admin-only)."""
 
-    def _check(principal: Principal = Depends(get_current_principal)) -> Principal:
+    def _check(principal: Principal = Depends(require_password_rotation_complete)) -> Principal:
         if principal.role not in role_names:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

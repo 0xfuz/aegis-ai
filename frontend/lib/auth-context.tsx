@@ -23,6 +23,7 @@ interface AuthContextValue {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  clearSession: () => void;
   hasPermission: (code: string) => boolean;
 }
 
@@ -70,6 +71,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [loadCurrentUser, router],
   );
 
+  const clearSession = useCallback(() => {
+    clearTokens();
+    setUser(null);
+  }, []);
+
   const logout = useCallback(async () => {
     const refreshToken = typeof window !== "undefined" ? localStorage.getItem("aegis_refresh_token") : null;
     if (refreshToken) {
@@ -81,10 +87,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // tokens are cleared locally either way.
       });
     }
-    clearTokens();
-    setUser(null);
+    clearSession();
     router.push("/login");
-  }, [router]);
+  }, [clearSession, router]);
 
   const hasPermission = useCallback(
     (code: string) => Boolean(user?.role.permissions.includes(code)),
@@ -92,7 +97,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout, hasPermission }}>
+    <AuthContext.Provider value={{ user, isLoading, login, logout, clearSession, hasPermission }}>
       {children}
     </AuthContext.Provider>
   );

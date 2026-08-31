@@ -17,6 +17,12 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int
+    password_rotation_required: bool = False
+
+
+class PasswordRotationRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
 
 
 class RoleRead(BaseModel):

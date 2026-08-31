@@ -1,27 +1,43 @@
 from datetime import datetime, timezone
+import re
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status as http_status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.modules.evidence.api.schemas import (
-    EntityRead, EntityRelationshipRead, EventRead, EvidenceDetail, EvidenceRead,
+    EntityRead, EntityRelationshipRead, EventRead, EvidenceDetail, EvidenceRead, EvidenceInventoryPage, TimelinePage,
     IndicatorOccurrenceRead, IndicatorRead, EntityObservationRead, RawRecordRead,
+    EntityPage, EntityObservationPage, IndicatorOccurrencePage,
 )
 from app.modules.evidence.domain.service import EvidenceIngestionService
+from app.modules.evidence.domain.read_projection import EvidenceInventoryService
+from app.modules.evidence.domain.timeline_projection import TimelineProjectionService
+from app.modules.evidence.domain.occurrence_projection import OccurrenceProjectionService
 from app.modules.evidence.infrastructure.models import AuditEvent, EvidenceItem, EvidenceParseRun
 from app.modules.evidence.infrastructure.repository import EvidenceRepository
 from app.modules.evidence.infrastructure.storage import EvidenceStorage
 from app.modules.evidence.domain.graph_projection import CanonicalGraphProjectionService, GraphFilters
 from app.modules.evidence.api.graph_schemas import CanonicalGraphRead
 from app.modules.identity.api.dependencies import Principal, require_permission
+from app.modules.identity.infrastructure.models import User
 from app.shared.database import get_db
 from app.shared.exceptions import NotFoundError
 
 router = APIRouter(prefix="/investigations", tags=["Canonical Evidence"])
+
+_TIMELINE_ISO_8601 = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})$"
+)
+
+
+def _active_principal_or_404(principal: Principal, db: Session) -> None:
+    user = db.get(User, principal.user_id)
+    if user is None or user.org_id != principal.org_id or not user.is_active:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Evidence not found.")
 
 
 def _evidence(db: Session, principal: Principal, investigation_id: UUID, evidence_id: UUID):
@@ -72,6 +88,23 @@ def list_evidence(
     return [_serialize_evidence(db, row) for row in rows]
 
 
+@router.get("/{investigation_id}/evidence/inventory", response_model=EvidenceInventoryPage)
+def evidence_inventory(
+    investigation_id: UUID,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+) -> EvidenceInventoryPage:
+    if set(request.query_params) - {"limit", "offset"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
+    _active_principal_or_404(principal, db)
+    return EvidenceInventoryPage.model_validate(
+        EvidenceInventoryService(db).list(principal.org_id, investigation_id, limit, offset)
+    )
+
+
 @router.get("/{investigation_id}/evidence/{evidence_id}", response_model=EvidenceDetail)
 def get_evidence(investigation_id: UUID, evidence_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> EvidenceDetail:
     evidence = _evidence(db, principal, investigation_id, evidence_id)
@@ -106,24 +139,52 @@ def list_events(investigation_id: UUID, principal: Principal = Depends(require_p
     return [EventRead.model_validate(row) for row in EvidenceRepository(db).events(principal.org_id, investigation_id)]
 
 
-@router.get("/{investigation_id}/indicators", response_model=list[IndicatorRead])
-def list_indicators(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[IndicatorRead]:
-    return [IndicatorRead.model_validate(row) for row in EvidenceRepository(db).indicators(principal.org_id, investigation_id)]
+@router.get("/{investigation_id}/timeline", response_model=TimelinePage)
+def timeline(
+    investigation_id: UUID,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    from_at: datetime | None = Query(default=None, alias="from"),
+    to_at: datetime | None = Query(default=None, alias="to"),
+    evidence_id: UUID | None = Query(default=None),
+    principal: Principal = Depends(require_permission("investigation:read")),
+    db: Session = Depends(get_db),
+) -> TimelinePage:
+    if set(request.query_params) - {"limit", "offset", "from", "to", "evidence_id"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
+    for name in ("from", "to"):
+        values = request.query_params.getlist(name)
+        if len(values) > 1 or (values and not _TIMELINE_ISO_8601.fullmatch(values[0])):
+            raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Timeline ranges must use timezone-aware ISO-8601 timestamps.")
+    _active_principal_or_404(principal, db)
+    return TimelinePage.model_validate(TimelineProjectionService(db).list(
+        principal.org_id, investigation_id, limit=limit, offset=offset,
+        from_at=from_at, to_at=to_at, evidence_id=evidence_id,
+    ))
 
 
-@router.get("/{investigation_id}/indicators/{indicator_id}/occurrences", response_model=list[IndicatorOccurrenceRead])
-def list_indicator_occurrences(investigation_id: UUID, indicator_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[IndicatorOccurrenceRead]:
-    return [IndicatorOccurrenceRead.model_validate(row) for row in EvidenceRepository(db).indicator_occurrences(principal.org_id, investigation_id, indicator_id)]
+def _bounded_query(request: Request) -> None:
+    if set(request.query_params) - {"limit", "offset"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported query parameter.")
 
 
-@router.get("/{investigation_id}/entities", response_model=list[EntityRead])
-def list_entities(investigation_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[EntityRead]:
-    return [EntityRead.model_validate(row) for row in EvidenceRepository(db).entities(principal.org_id, investigation_id)]
+@router.get("/{investigation_id}/indicators", response_model=IndicatorOccurrencePage)
+def list_indicators(investigation_id: UUID, request: Request, limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0), principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> IndicatorOccurrencePage:
+    _bounded_query(request); _active_principal_or_404(principal, db)
+    return IndicatorOccurrencePage.model_validate(OccurrenceProjectionService(db).indicators(principal.org_id, investigation_id, limit, offset))
 
 
-@router.get("/{investigation_id}/entities/{entity_id}/observations", response_model=list[EntityObservationRead])
-def list_entity_observations(investigation_id: UUID, entity_id: UUID, principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> list[EntityObservationRead]:
-    return [EntityObservationRead.model_validate(row) for row in EvidenceRepository(db).entity_observations(principal.org_id, investigation_id, entity_id)]
+@router.get("/{investigation_id}/entities", response_model=EntityPage)
+def list_entities(investigation_id: UUID, request: Request, limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0), principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> EntityPage:
+    _bounded_query(request); _active_principal_or_404(principal, db)
+    return EntityPage.model_validate(OccurrenceProjectionService(db).entities(principal.org_id, investigation_id, limit, offset))
+
+
+@router.get("/{investigation_id}/entities/{entity_id}/observations", response_model=EntityObservationPage)
+def list_entity_observations(investigation_id: UUID, entity_id: UUID, request: Request, limit: int = Query(default=50, ge=1, le=200), offset: int = Query(default=0, ge=0), principal: Principal = Depends(require_permission("investigation:read")), db: Session = Depends(get_db)) -> EntityObservationPage:
+    _bounded_query(request); _active_principal_or_404(principal, db)
+    return EntityObservationPage.model_validate(OccurrenceProjectionService(db).entity_observations(principal.org_id, investigation_id, entity_id, limit, offset))
 
 
 @router.get("/{investigation_id}/relationships", response_model=list[EntityRelationshipRead])
@@ -134,16 +195,18 @@ def list_relationships(investigation_id: UUID, principal: Principal = Depends(re
 @router.get("/{investigation_id}/graph", response_model=CanonicalGraphRead, tags=["Canonical Graph"])
 def get_canonical_graph(
     investigation_id: UUID,
+    request: Request,
     entity_type: str | None = Query(default=None),
     relationship_type: str | None = Query(default=None),
     evidence_id: UUID | None = Query(default=None),
-    start_at: datetime | None = Query(default=None),
-    end_at: datetime | None = Query(default=None),
     principal: Principal = Depends(require_permission("investigation:read")),
     db: Session = Depends(get_db),
 ) -> CanonicalGraphRead:
+    if set(request.query_params) - {"entity_type", "relationship_type", "evidence_id"}:
+        raise HTTPException(status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported graph query parameter.")
+    _active_principal_or_404(principal, db)
     graph = CanonicalGraphProjectionService(db).project(
         principal.org_id, investigation_id,
-        GraphFilters(entity_type, relationship_type, evidence_id, start_at, end_at),
+        GraphFilters(entity_type, relationship_type, evidence_id),
     )
     return CanonicalGraphRead.model_validate(graph)

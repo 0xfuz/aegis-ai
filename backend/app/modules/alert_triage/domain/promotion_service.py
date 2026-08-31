@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.modules.alert_triage.domain.correlation_service import AlertCorrelationService
+from app.modules.alert_triage.domain.correlation_service import CORRELATION_VERSION
+from app.modules.alert_triage.domain.correlation_v2_service import CORRELATION_V2_VERSION
 from app.modules.alert_triage.domain.triage_service import AlertClusterTriageService
 from app.modules.alert_triage.infrastructure.models import (
     AlertCluster, AlertClusterAssessment, AlertClusterMembership, AlertClusterPromotion,
@@ -62,7 +64,7 @@ class AlertClusterPromotionService:
                 return self._read(existing, created=False)
             if cluster.status != "OPEN":
                 raise ValidationError("Only an OPEN alert cluster may be promoted.")
-            members = AlertCorrelationService(self.db).list_members(org_id, cluster.id)
+            members = self._members_for_cluster(org_id, cluster)
             if not members:
                 raise ValidationError("Alert cluster has no promotable members.")
             alerts = [self._alert(org_id, member.alert_id) for member in members]
@@ -130,6 +132,16 @@ class AlertClusterPromotionService:
         return self.db.scalar(select(AlertClusterPromotion).where(
             AlertClusterPromotion.org_id == org_id, AlertClusterPromotion.cluster_id == cluster_id,
         ))
+
+    def _members_for_cluster(self, org_id: UUID, cluster: AlertCluster) -> list[AlertClusterMembership]:
+        """Read the cluster's already-persisted, explicitly versioned history only."""
+        if cluster.correlation_version not in {CORRELATION_VERSION, CORRELATION_V2_VERSION}:
+            raise ValidationError("Unsupported correlation version for promotion.")
+        return list(self.db.scalars(select(AlertClusterMembership).where(
+            AlertClusterMembership.org_id == org_id,
+            AlertClusterMembership.cluster_id == cluster.id,
+            AlertClusterMembership.correlation_version == cluster.correlation_version,
+        ).order_by(AlertClusterMembership.added_at, AlertClusterMembership.id)))
 
     def _alert(self, org_id: UUID, alert_id: UUID) -> CanonicalAlert:
         row = self.db.scalar(select(CanonicalAlert).where(CanonicalAlert.id == alert_id, CanonicalAlert.org_id == org_id))

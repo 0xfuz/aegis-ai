@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app.modules.alert_triage.domain.correlation_service import CORRELATION_VERSION
 from app.modules.alert_triage.domain.correlation_v2_service import CORRELATION_V2_VERSION
@@ -13,7 +13,7 @@ from app.modules.alert_triage.infrastructure.models import AlertCluster, AlertCl
 from app.modules.connectors.infrastructure.models import Connector, RawEvent
 from app.modules.identity.infrastructure.models import Organization
 from app.shared.database import SessionLocal
-from app.shared.exceptions import NotFoundError
+from app.shared.exceptions import NotFoundError, ValidationError
 
 
 NOW = datetime(2026, 8, 10, 12, tzinfo=timezone.utc)
@@ -97,3 +97,49 @@ def test_v1_behavior_and_cross_org_scope_remain_intact(db):
     assert service.assess(other.id, isolated.id, NOW + timedelta(minutes=1)).cluster_id == isolated.id
     with pytest.raises(NotFoundError):
         service.assess(other.id, v1.id, NOW + timedelta(minutes=1))
+
+
+@pytest.mark.parametrize("member_count", [1, 5, 10])
+def test_assessment_input_materialization_uses_a_bounded_select_shape(db, member_count):
+    org, source = context(db)
+    alerts = [alert(db, org, source, f"bounded-{index}") for index in range(member_count)]
+    row = cluster(db, org, CORRELATION_V2_VERSION, alerts)
+    service = AlertClusterTriageService(db)
+    org_id, cluster_id = org.id, row.id
+    observed = []
+
+    def count_select(_connection, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith("SELECT"):
+            observed.append(1)
+
+    db.expire_all()
+    materialized_cluster = db.get(AlertCluster, cluster_id)
+    event.listen(db.get_bind(), "before_cursor_execute", count_select)
+    try:
+        members, materialized = service._materialize_assessment_inputs(org_id, materialized_cluster)
+    finally:
+        event.remove(db.get_bind(), "before_cursor_execute", count_select)
+    assert len(observed) == 3  # lineage, version-scoped members, same-org alerts
+    assert [member.alert_id for member in members] == [item.id for item in materialized]
+
+
+def test_bulk_materialization_fails_closed_for_empty_unsupported_or_foreign_inputs(db):
+    org, source = context(db)
+    service = AlertClusterTriageService(db)
+    empty = cluster(db, org, CORRELATION_V2_VERSION, [])
+    assert service._materialize_assessment_inputs(org.id, empty) == ([], [])
+
+    unsupported = cluster(db, org, CORRELATION_V2_VERSION, [alert(db, org, source, "unsupported")])
+    unsupported.correlation_version = "unknown-version"; db.commit()
+    with pytest.raises(ValidationError):
+        service._materialize_assessment_inputs(org.id, unsupported)
+
+    other, other_source = context(db)
+    foreign = alert(db, other, other_source, "foreign")
+    owned = cluster(db, org, CORRELATION_V2_VERSION, [])
+    db.add(AlertClusterMembership(
+        org_id=org.id, cluster_id=owned.id, alert_id=foreign.id, candidate_alert_id=None,
+        correlation_version=CORRELATION_V2_VERSION, score=0, reasons=[], added_at=NOW,
+    )); db.commit()
+    with pytest.raises(NotFoundError):
+        service._materialize_assessment_inputs(org.id, owned)

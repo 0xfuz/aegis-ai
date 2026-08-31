@@ -1,118 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { apiFetch, ApiError } from "@/lib/api-client";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiError, apiFetch } from "@/lib/api-client";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { SeverityBadge } from "@/components/ui/severity-badge";
-import { ConfidenceRing } from "@/components/ui/confidence-ring";
+import { EmptyState, LoadingState, NotFoundState, PermissionDeniedState, RetryableErrorState } from "@/components/ui/async-state";
 
-interface InvestigationSummary {
-  id: string;
-  title: string;
-  source: string;
-  severity: string;
-  status: string;
-  confidence: number;
-  created_at: string;
-}
-interface DemoScenario { id: string; title: string; loaded: boolean; }
+type Investigation = { id: string; title: string; source: string; severity: string; status: string; confidence: number; created_at: string };
+type Page = { items: Investigation[]; limit: number; offset: number; returned_count: number; total: number };
+type ViewState = "loading" | "ready" | "denied" | "not-found" | "error";
+const STATUSES = ["new", "triaging", "investigating", "contained", "resolved"];
+const PAGE_SIZES = [10, 25, 50];
+function at(value: string) { return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC", timeZoneName: "short" }).format(new Date(value)); }
 
 export default function InvestigationsPage() {
-  const router = useRouter();
-  const [investigations, setInvestigations] = useState<InvestigationSummary[] | null>(null);
-  const [demos, setDemos] = useState<DemoScenario[]>([]);
-  const [loadingDemo, setLoadingDemo] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    Promise.all([apiFetch<InvestigationSummary[]>("/api/v1/investigations"), apiFetch<DemoScenario[]>("/api/v1/demos")])
-      .then(([rows, demoRows]) => { setInvestigations(rows); setDemos(demoRows); })
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load investigations."));
-  }, []);
-
-  async function loadDemo(id: string) {
-    setLoadingDemo(id); setError(null);
-    try { const loaded = await apiFetch<{ id: string }>(`/api/v1/demos/${id}`, { method: "POST" }); router.push(`/investigations/${loaded.id}`); }
-    catch (err) { setError(err instanceof ApiError ? err.message : "Couldn't load demo investigation."); }
-    finally { setLoadingDemo(null); }
-  }
-
-  return (
-    <div>
-      <h1 className="font-display text-xl font-medium text-text-primary">Investigations</h1>
-      <p className="mt-1 text-sm text-text-muted">
-        Includes seeded mock events plus anything real ingested via a connector.
-      </p>
-
-      {error && (
-        <div className="mt-4 rounded border border-severity-critical/40 bg-severity-critical/10 px-3 py-2 text-sm text-severity-critical">
-          {error}
-        </div>
-      )}
-
-      {investigations?.length === 0 && (
-        <Card className="mt-4 border border-signal/40 bg-signal/5">
-          <h2 className="font-display text-lg text-text-primary">Welcome to Aegis-AI</h2>
-          <p className="mt-2 text-sm text-text-muted">Create an investigation from your evidence, or explore a complete synthetic case in under two minutes.</p>
-          <div className="mt-4">
-            <p className="text-sm font-medium text-text-primary">🚀 Try Demo Investigation</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {demos.map((demo) => <button key={demo.id} disabled={loadingDemo !== null || demo.loaded} onClick={() => loadDemo(demo.id)} className="rounded bg-signal px-3 py-2 text-xs font-medium text-black disabled:opacity-50">{loadingDemo === demo.id ? "Loading…" : demo.loaded ? `${demo.title} loaded` : demo.title}</button>)}
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {investigations && investigations.length > 0 && <div className="mt-4 flex flex-wrap items-center gap-2"><span className="text-xs text-text-muted">Load Demo Investigation:</span>{demos.filter((demo) => !demo.loaded).map((demo) => <button key={demo.id} disabled={loadingDemo !== null} onClick={() => loadDemo(demo.id)} className="rounded border border-hairline px-2 py-1 text-xs text-signal disabled:opacity-50">{loadingDemo === demo.id ? "Loading…" : demo.title}</button>)}</div>}
-
-      <Card className="mt-4 p-0">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-hairline text-left text-xs text-text-muted">
-              <th className="px-4 py-3 font-normal">Title</th>
-              <th className="px-4 py-3 font-normal">Source</th>
-              <th className="px-4 py-3 font-normal">Severity</th>
-              <th className="px-4 py-3 font-normal">Status</th>
-              <th className="px-4 py-3 font-normal">Confidence</th>
-            </tr>
-          </thead>
-          <tbody>
-            {investigations === null && !error && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-text-muted">
-                  Loading…
-                </td>
-              </tr>
-            )}
-            {investigations?.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-text-muted">
-                  No investigations yet.
-                </td>
-              </tr>
-            )}
-            {investigations?.map((inv) => (
-              <tr key={inv.id} className="border-b border-hairline last:border-0 hover:bg-surface-raised">
-                <td className="px-4 py-3">
-                  <Link href={`/investigations/${inv.id}`} className="text-text-primary hover:text-signal">
-                    {inv.title}
-                  </Link>
-                </td>
-                <td className="px-4 py-3 text-text-muted">{inv.source}</td>
-                <td className="px-4 py-3">
-                  <SeverityBadge severity={inv.severity} />
-                </td>
-                <td className="px-4 py-3 capitalize text-text-muted">{inv.status}</td>
-                <td className="px-4 py-3">
-                  <ConfidenceRing value={inv.confidence} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-    </div>
-  );
+  const router = useRouter(); const pathname = usePathname(); const params = useSearchParams();
+  const status = STATUSES.includes(params.get("status") ?? "") ? params.get("status") ?? "" : "";
+  const limit = PAGE_SIZES.includes(Number(params.get("limit"))) ? Number(params.get("limit")) : 25;
+  const offset = Math.max(0, Number(params.get("offset")) || 0);
+  const [page, setPage] = useState<Page | null>(null); const [view, setView] = useState<ViewState>("loading"); const [revision, setRevision] = useState(0); const controller = useRef<AbortController | null>(null);
+  const update = useCallback((next: { status?: string; limit?: number; offset?: number }) => { const query = new URLSearchParams(); const nextStatus = next.status ?? status; const nextLimit = next.limit ?? limit; const nextOffset = next.offset ?? offset; if (nextStatus) query.set("status", nextStatus); query.set("limit", String(nextLimit)); if (nextOffset) query.set("offset", String(nextOffset)); router.replace(`${pathname}?${query.toString()}`); }, [limit, offset, pathname, router, status]);
+  const load = useCallback(async () => { controller.current?.abort(); const next = new AbortController(); controller.current = next; setView("loading"); const query = new URLSearchParams({ limit: String(limit), offset: String(offset) }); if (status) query.set("status", status); try { const result = await apiFetch<Page>(`/api/v1/investigations?${query}`, { signal: next.signal }); if (!next.signal.aborted) { setPage(result); setView("ready"); } } catch (error) { if (next.signal.aborted) return; setView(error instanceof ApiError ? error.status === 403 ? "denied" : error.status === 404 ? "not-found" : "error" : "error"); } }, [limit, offset, status]);
+  useEffect(() => { void load(); return () => controller.current?.abort(); }, [load, revision]);
+  const shownFrom = page?.total ? page.offset + 1 : 0; const shownTo = page ? Math.min(page.offset + page.returned_count, page.total) : 0;
+  return <div><h1 className="font-display text-xl font-medium text-text-primary">Cases</h1><p className="mt-1 text-sm text-text-muted">Organization-scoped Investigation records in server-defined order.</p><Card className="mt-5"><div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Status<select value={status} onChange={event => update({ status: event.target.value, offset: 0 })} className="mt-1 block w-full rounded border border-hairline bg-surface p-2"><option value="">All statuses</option>{STATUSES.map(item => <option key={item} value={item}>{item}</option>)}</select></label><label className="text-sm">Cases per page<select value={limit} onChange={event => update({ limit: Number(event.target.value), offset: 0 })} className="mt-1 block w-full rounded border border-hairline bg-surface p-2">{PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}</select></label></div></Card>{view === "loading" && <div className="mt-4"><LoadingState title="Loading Cases" message="Loading server-authoritative Investigation records." /></div>}{view === "denied" && <div className="mt-4"><PermissionDeniedState /></div>}{view === "not-found" && <div className="mt-4"><NotFoundState /></div>}{view === "error" && <div className="mt-4"><RetryableErrorState onRetry={() => setRevision(value => value + 1)} message="Cases are temporarily unavailable." /></div>}{view === "ready" && page && <><p className="mt-4 text-sm text-text-muted" aria-live="polite">Showing {shownFrom}–{shownTo} of {page.total} Cases. Times are UTC.</p>{page.items.length === 0 ? <div className="mt-4"><EmptyState title={status ? "No Cases match this status" : "No Cases yet"} message={status ? "No server-authoritative Investigation records match the selected status." : "Cases appear after authorized Investigation creation or promotion."} /></div> : <><div className="mt-4 hidden overflow-x-auto md:block"><Card className="p-0"><table className="w-full text-sm"><thead><tr className="border-b border-hairline text-left text-xs text-text-muted"><th className="px-4 py-3">Case</th><th className="px-4 py-3">Source</th><th className="px-4 py-3">Severity</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Created (UTC)</th></tr></thead><tbody>{page.items.map(item => <tr key={item.id} className="border-b border-hairline last:border-0"><td className="px-4 py-3"><Link href={`/investigations/${item.id}`} className="text-text-primary hover:text-signal focus-visible:outline">{item.title}</Link></td><td className="px-4 py-3 text-text-muted">{item.source}</td><td className="px-4 py-3"><SeverityBadge severity={item.severity} /></td><td className="px-4 py-3 capitalize text-text-muted">{item.status}</td><td className="px-4 py-3 text-text-muted">{at(item.created_at)}</td></tr>)}</tbody></table></Card></div><ol className="mt-4 space-y-3 md:hidden">{page.items.map(item => <li key={item.id}><Card><Link href={`/investigations/${item.id}`} className="font-medium text-text-primary hover:text-signal focus-visible:outline">{item.title}</Link><dl className="mt-2 grid grid-cols-2 gap-2 text-xs text-text-muted"><div><dt>Source</dt><dd>{item.source}</dd></div><div><dt>Status</dt><dd className="capitalize">{item.status}</dd></div><div><dt>Severity</dt><dd><SeverityBadge severity={item.severity} /></dd></div><div><dt>Created (UTC)</dt><dd>{at(item.created_at)}</dd></div></dl></Card></li>)}</ol></>}<nav className="mt-4 flex items-center justify-between gap-3" aria-label="Cases pagination"><Button type="button" variant="secondary" disabled={page.offset === 0} onClick={() => update({ offset: Math.max(0, page.offset - page.limit) })}>Previous</Button><Button type="button" variant="secondary" disabled={page.offset + page.returned_count >= page.total} onClick={() => update({ offset: page.offset + page.limit })}>Next</Button></nav></>}</div>;
 }

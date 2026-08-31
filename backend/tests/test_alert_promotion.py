@@ -7,11 +7,13 @@ from sqlalchemy import func, select
 
 from app.core.config import Settings
 from app.modules.ai_reasoning.infrastructure.intelligence_models import IntelligenceAnalysis
+from app.modules.ai_reasoning.domain.context_builder import ContextBuilder
 from app.modules.alert_triage.domain.correlation_service import AlertCorrelationService
+from app.modules.alert_triage.domain.correlation_v2_service import AlertCorrelationV2Service, CORRELATION_V2_VERSION
 from app.modules.alert_triage.domain.promotion_service import AlertClusterPromotionService, PROMOTION_EXPORT_VERSION
 from app.modules.alert_triage.domain.service import CanonicalAlertCreate, CanonicalAlertService
 from app.modules.alert_triage.domain.triage_service import AlertClusterTriageService
-from app.modules.alert_triage.infrastructure.models import AlertCluster, AlertClusterPromotion, CanonicalAlertOccurrence, AlertDeduplicationDecision
+from app.modules.alert_triage.infrastructure.models import AlertCluster, AlertClusterAssessment, AlertClusterMembership, AlertClusterPromotion, CanonicalAlertOccurrence, AlertDeduplicationDecision
 from app.modules.connectors.infrastructure.models import Connector, RawEvent
 from app.modules.evidence.infrastructure.models import AuditEvent, Entity, EntityRelationship, Event, EvidenceItem, Indicator, RawRecord
 from app.modules.identity.infrastructure.models import Organization, Role, User
@@ -86,6 +88,36 @@ def test_promotion_is_idempotent_and_export_snapshot_is_deterministic(db, tmp_pa
         __import__("json").dumps({"format": "aegis.alert-promotion.export", "version": "1.0", "cluster_id": str(cluster.id), "manifest_fingerprint": __import__("hashlib").sha256(__import__("json").dumps(row.manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest(), "alerts": row.manifest["members"]}, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
     ).hexdigest()
     assert db.scalar(select(func.count()).select_from(AlertClusterPromotion).where(AlertClusterPromotion.cluster_id == cluster.id)) == 1
+
+
+def test_promotion_reads_only_persisted_v2_memberships(db, tmp_path, monkeypatch):
+    org, user, connector = context(db); now = datetime(2026, 8, 9, 12, tzinfo=timezone.utc)
+    first = add_alert(db, org, connector, "v2-one", now, {"hostname":"v2-host","username":"analyst","process":"cmd"})
+    second = add_alert(db, org, connector, "v2-two", now + timedelta(seconds=10), {"hostname":"v2-host","username":"analyst","process":"cmd"})
+    v2 = AlertCorrelationV2Service(db); cluster = v2.process(org.id, first.id); cluster = v2.process(org.id, second.id)
+    assessment = AlertClusterTriageService(db).assess(org.id, cluster.id, now + timedelta(minutes=30))
+    before = [(m.id, m.score, m.reasons, m.correlation_version) for m in db.scalars(select(AlertClusterMembership).where(AlertClusterMembership.cluster_id == cluster.id))]
+    monkeypatch.setattr(AlertCorrelationService, "process", lambda *_args: (_ for _ in ()).throw(AssertionError("v1 recomputation")))
+    result = service(db, tmp_path).promote(org.id, cluster.id, user.id)
+    promotion = db.get(AlertClusterPromotion, result.id)
+    assert promotion.manifest["correlation_version"] == CORRELATION_V2_VERSION
+    assert {entry["membership_context"]["correlation_version"] for entry in promotion.manifest["members"]} == {CORRELATION_V2_VERSION}
+    assert db.get(AlertClusterAssessment, assessment.id).ledger is not None
+    assert [(m.id, m.score, m.reasons, m.correlation_version) for m in db.scalars(select(AlertClusterMembership).where(AlertClusterMembership.cluster_id == cluster.id))] == before
+
+
+def test_context_builder_reconstructs_promoted_v2_without_recalculation(db, tmp_path, monkeypatch):
+    org, user, connector = context(db); now = datetime(2026, 8, 9, 12, tzinfo=timezone.utc)
+    first=add_alert(db,org,connector,"ctx-v2-1",now,{"hostname":"ctx","username":"u","process":"p"});second=add_alert(db,org,connector,"ctx-v2-2",now+timedelta(seconds=10),{"hostname":"ctx","username":"u","process":"p"})
+    v2=AlertCorrelationV2Service(db);cluster=v2.process(org.id,first.id);cluster=v2.process(org.id,second.id);assessment=AlertClusterTriageService(db).assess(org.id,cluster.id,now+timedelta(minutes=30));promotion=service(db,tmp_path).promote(org.id,cluster.id,user.id)
+    before=[(m.id,m.score,m.reasons,m.correlation_version) for m in db.scalars(select(AlertClusterMembership).where(AlertClusterMembership.cluster_id==cluster.id))]
+    monkeypatch.setattr(AlertCorrelationV2Service,"process",lambda *_: (_ for _ in ()).throw(AssertionError("recalculation")));monkeypatch.setattr(AlertClusterTriageService,"assess",lambda *_: (_ for _ in ()).throw(AssertionError("retriage")))
+    snapshot=ContextBuilder(db).build(org.id,promotion.investigation_id).snapshot
+    assert snapshot["investigation_id"]==str(promotion.investigation_id) and snapshot["triage"]["score"]==assessment.score
+    assert snapshot["triage"]["priority"]==assessment.priority and snapshot["correlation_v2"]
+    assert {m["version"] for m in snapshot["correlation_v2"]}=={CORRELATION_V2_VERSION}
+    assert {m["score"] for m in snapshot["correlation_v2"]}=={m[1] for m in before}
+    assert [(m.id,m.score,m.reasons,m.correlation_version) for m in db.scalars(select(AlertClusterMembership).where(AlertClusterMembership.cluster_id==cluster.id))]==before
 
 
 def test_promotion_requires_open_cluster_current_assessment_and_same_org_actor(db, tmp_path):

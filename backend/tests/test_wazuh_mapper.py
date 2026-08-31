@@ -34,7 +34,7 @@ def test_approved_sanitized_fixtures_map_deterministically(name):
 def test_windows_mapping_and_source_asserted_mitre_metadata():
     mapped = map_wazuh_alert(fixture("windows_authentication.json"))
     assert mapped.source_alert_id == "wazuh:wazuh-lab:1710000000.1001"
-    assert mapped.severity == "HIGH" and mapped.category == "authentication_failed"
+    assert mapped.rule_id == "60122" and mapped.severity == "HIGH" and mapped.category == "authentication_failed"
     assert mapped.observables.stored() == {"source_ip": "198.51.100.41", "hostname": "win-lab-01", "username": "lab-user", "process": "c:\\windows\\system32\\lsass.exe"}
     assert mapped.source_metadata["wazuh"]["mitre"] == {"id": ["T1110"], "tactic": ["Credential Access"], "technique": ["Brute Force"]}
     assert "mitre_mappings" not in mapped.source_metadata and "organization_id" not in mapped.model_dump()
@@ -56,6 +56,19 @@ def test_sparse_valid_alert_and_agent_id_hostname_fallback_work():
     assert sparse.title == "Minimal Wazuh alert" and sparse.observables.stored() == {}
     payload = fixture("sparse_valid.json"); payload["agent"] = {"id": "007"}
     assert map_wazuh_alert(payload).observables.stored()["hostname"] == "agent-007"
+
+
+@pytest.mark.parametrize("rule_id", ["100500", "502"])
+def test_supported_wazuh_rule_ids_persist_in_canonical_mapping(rule_id):
+    payload = fixture("sparse_valid.json"); payload["rule"]["id"] = rule_id
+    assert map_wazuh_alert(payload).rule_id == rule_id
+
+
+@pytest.mark.parametrize("rule_id", [None, "", "rule id with spaces", "<script>", "x" * 129])
+def test_missing_or_malformed_wazuh_rule_id_is_rejected(rule_id):
+    payload = fixture("sparse_valid.json"); payload["rule"]["id"] = rule_id
+    with pytest.raises(WazuhMappingError, match="rule.id"):
+        map_wazuh_alert(payload)
 
 
 def test_missing_id_and_malformed_timestamp_are_rejected():

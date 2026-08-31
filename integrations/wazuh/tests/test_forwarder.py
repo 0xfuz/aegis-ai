@@ -12,6 +12,13 @@ def config(tmp_path, **changes):
 
 def payload(): return {"id": "1", "timestamp": "2026-08-10T12:00:00Z", "rule": {"id": "1", "level": 3}, "manager": {"name": "m"}}
 
+def test_environment_configuration_reads_only_a_bounded_secret_file(tmp_path):
+    secret = tmp_path / "ingest-secret"; secret.write_text("test-secret-not-logged\n")
+    config = ForwarderConfig.from_env({"AEGIS_WAZUH_BASE_URL": "https://aegis.test", "AEGIS_WAZUH_CONNECTOR_ID": "connector", "AEGIS_WAZUH_INGEST_SECRET_FILE": str(secret), "AEGIS_WAZUH_SPOOL_DIR": str(tmp_path / "spool")})
+    assert config.ingest_secret == "test-secret-not-logged"
+    with pytest.raises(ValueError):
+        ForwarderConfig.from_env({"AEGIS_WAZUH_BASE_URL": "https://aegis.test", "AEGIS_WAZUH_CONNECTOR_ID": "connector", "AEGIS_WAZUH_INGEST_SECRET": "not-supported", "AEGIS_WAZUH_SPOOL_DIR": str(tmp_path / "spool")})
+
 def test_success_and_replay_remove_original_payload_unchanged(tmp_path):
     seen = []
     f = WazuhForwarder(config(tmp_path), post=lambda *args: seen.append(json.loads(args[1])) or 201, clock=lambda: 100)

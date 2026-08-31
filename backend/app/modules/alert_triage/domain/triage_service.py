@@ -10,7 +10,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.alert_triage.domain.correlation_service import AlertCorrelationService
+from app.modules.alert_triage.domain.correlation_service import AlertCorrelationService, CORRELATION_VERSION
+from app.modules.alert_triage.domain.correlation_v2_service import CORRELATION_V2_VERSION
 from app.modules.alert_triage.infrastructure.models import AlertCluster, AlertClusterAssessment, AlertClusterMembership, CanonicalAlert
 from app.modules.assets.infrastructure.models import Asset
 from app.modules.investigations.infrastructure.models import IOC
@@ -56,8 +57,7 @@ class AlertClusterTriageService:
             raise ValidationError("Scoring reference timestamp must include a timezone.")
         reference_at = reference_at.astimezone(timezone.utc)
         cluster = self._root_cluster(org_id, cluster_id)
-        members = self._members_for_cluster_version(org_id, cluster)
-        alerts = [self._alert(org_id, member.alert_id) for member in members]
+        members, alerts = self._materialize_assessment_inputs(org_id, cluster)
         ledger = self._ledger(org_id, cluster, alerts, members, reference_at)
         score = sum(entry["points"] for entry in ledger)
         if not 0 <= score <= 100:
@@ -193,19 +193,62 @@ class AlertClusterTriageService:
             raise NotFoundError("Alert cluster not found.")
         return AlertCorrelationService(self.db)._root_cluster(org_id, cluster.id)
 
-    def _members_for_cluster_version(self, org_id: UUID, cluster: AlertCluster) -> list[AlertClusterMembership]:
+    def _lineage_for_cluster(self, org_id: UUID, cluster: AlertCluster) -> set[UUID]:
+        clusters = {row.id: row for row in self.db.scalars(select(AlertCluster).where(AlertCluster.org_id == org_id))}
+        return {row.id for row in clusters.values() if AlertCorrelationService._root_from_map(clusters, row.id).id == cluster.id}
+
+    def _members_for_cluster_version(
+        self,
+        org_id: UUID,
+        cluster: AlertCluster,
+        lineage: set[UUID] | None = None,
+    ) -> list[AlertClusterMembership]:
         """Read exactly this cluster's persisted correlation-version history.
 
         V1 merge lineage remains supported, while v2 reads only v2 memberships.
         This is a read-boundary compatibility fix; scoring inputs and rules stay
         unchanged.
         """
-        clusters = {row.id: row for row in self.db.scalars(select(AlertCluster).where(AlertCluster.org_id == org_id))}
-        lineage = {row.id for row in clusters.values() if AlertCorrelationService._root_from_map(clusters, row.id).id == cluster.id}
+        lineage = self._lineage_for_cluster(org_id, cluster) if lineage is None else lineage
         return list(self.db.scalars(select(AlertClusterMembership).where(
             AlertClusterMembership.org_id == org_id, AlertClusterMembership.cluster_id.in_(lineage),
             AlertClusterMembership.correlation_version == cluster.correlation_version,
         ).order_by(AlertClusterMembership.added_at, AlertClusterMembership.id)))
+
+    def _materialize_assessment_inputs(
+        self,
+        org_id: UUID,
+        cluster: AlertCluster,
+    ) -> tuple[list[AlertClusterMembership], list[CanonicalAlert]]:
+        """Bulk-read the persisted, version-scoped inputs for one assessment.
+
+        The membership query retains the certified lineage and ordering rules.
+        One same-organization alert query replaces the prior one lookup per
+        membership; the returned list is rebuilt in membership order so ledger
+        ordering and all score tie-breakers remain unchanged.
+        """
+        if cluster.correlation_version not in {CORRELATION_VERSION, CORRELATION_V2_VERSION}:
+            raise ValidationError("Unsupported correlation version.")
+        lineage = self._lineage_for_cluster(org_id, cluster)
+        members = self._members_for_cluster_version(org_id, cluster, lineage)
+        alert_ids = {member.alert_id for member in members}
+        if not alert_ids:
+            return members, []
+        fetched = list(self.db.scalars(select(CanonicalAlert).where(
+            CanonicalAlert.org_id == org_id,
+            CanonicalAlert.id.in_(alert_ids),
+        )))
+        alerts_by_id = {alert.id: alert for alert in fetched}
+        for member in members:
+            if (
+                member.org_id != org_id
+                or member.cluster_id not in lineage
+                or member.correlation_version != cluster.correlation_version
+            ):
+                raise NotFoundError("Correlation membership is unavailable.")
+            if member.alert_id not in alerts_by_id:
+                raise NotFoundError("Canonical alert not found.")
+        return members, [alerts_by_id[member.alert_id] for member in members]
 
     def _alert(self, org_id: UUID, alert_id: UUID) -> CanonicalAlert:
         alert = self.db.scalar(select(CanonicalAlert).where(CanonicalAlert.org_id == org_id, CanonicalAlert.id == alert_id))

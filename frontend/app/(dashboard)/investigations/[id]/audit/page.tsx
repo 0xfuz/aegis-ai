@@ -1,4 +1,4 @@
 "use client";
 import { useParams } from "next/navigation";
-import { PlaceholderWorkspace } from "@/components/investigations/factual-workspace";
-export default function AuditPage() { const { id } = useParams<{ id: string }>(); return <PlaceholderWorkspace id={id} title="Audit Trail" />; }
+import { AuditTrailWorkspace } from "@/components/investigations/audit-trail-workspace";
+export default function AuditPage() { const { id } = useParams<{ id: string }>(); return <AuditTrailWorkspace id={id} />; }

@@ -52,7 +52,7 @@ def _create_token(
     return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def create_access_token(user_id: UUID, org_id: UUID, role: str, permissions: list[str]) -> str:
+def create_access_token(user_id: UUID, org_id: UUID, role: str, permissions: list[str], *, password_rotation_required: bool = False) -> str:
     return _create_token(
         subject=str(user_id),
         token_type=TokenType.ACCESS,
@@ -61,6 +61,7 @@ def create_access_token(user_id: UUID, org_id: UUID, role: str, permissions: lis
             "org_id": str(org_id),
             "role": role,
             "permissions": permissions,
+            "password_rotation_required": password_rotation_required,
         },
     )
 
@@ -82,6 +83,7 @@ class TokenPayload:
         self.org_id: Optional[str] = payload.get("org_id")
         self.role: Optional[str] = payload.get("role")
         self.permissions: list[str] = payload.get("permissions", [])
+        self.password_rotation_required: bool = payload.get("password_rotation_required", False) is True
 
 
 class InvalidTokenError(Exception):

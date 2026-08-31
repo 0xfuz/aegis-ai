@@ -18,6 +18,7 @@ from app.core.security import (
     verify_password,
 )
 from app.modules.identity.infrastructure.models import User
+from app.modules.evidence.infrastructure.models import AuditEvent
 from app.modules.identity.infrastructure.repository import (
     OrganizationRepository,
     RoleRepository,
@@ -40,7 +41,7 @@ class AuthService:
         self.users = UserRepository(db)
         self.revocations = TokenRevocationRepository(db)
 
-    def authenticate(self, email: str, password: str) -> tuple[str, str]:
+    def authenticate(self, email: str, password: str) -> tuple[str, str, bool]:
         user = self.users.get_by_email_any_org(email)
         if user is None or not verify_password(password, user.hashed_password):
             # Deliberately identical error for "no such user" and "wrong
@@ -51,7 +52,7 @@ class AuthService:
 
         return self._issue_tokens(user)
 
-    def refresh(self, refresh_token: str) -> tuple[str, str]:
+    def refresh(self, refresh_token: str) -> tuple[str, str, bool]:
         try:
             payload = decode_token(refresh_token, expected_type=TokenType.REFRESH)
         except InvalidTokenError as exc:
@@ -80,11 +81,11 @@ class AuthService:
             payload.jti, datetime.fromtimestamp(payload.exp, tz=timezone.utc)
         )
 
-    def _issue_tokens(self, user: User) -> tuple[str, str]:
+    def _issue_tokens(self, user: User) -> tuple[str, str, bool]:
         permission_codes = [p.code for p in user.role.permissions]
-        access = create_access_token(user.id, user.org_id, user.role.name, permission_codes)
+        access = create_access_token(user.id, user.org_id, user.role.name, permission_codes, password_rotation_required=user.must_rotate_password)
         refresh = create_refresh_token(user.id)
-        return access, refresh
+        return access, refresh, user.must_rotate_password
 
 
 class UserService:
@@ -147,4 +148,16 @@ class UserService:
         if user is None or user.org_id != org_id:
             raise NotFoundError("User not found.")
         user.is_active = True
+        return self.users.save(user)
+
+    def rotate_own_password(self, user_id: UUID, current_password: str, new_password: str) -> User:
+        from app.modules.identity.domain.bootstrap import validate_bootstrap_password
+
+        user = self.users.get_by_id(user_id)
+        if user is None or not user.is_active or not verify_password(current_password, user.hashed_password):
+            raise AuthenticationError("Incorrect email or password.")
+        validate_bootstrap_password(new_password)
+        user.hashed_password = hash_password(new_password)
+        user.must_rotate_password = False
+        self.db.add(AuditEvent(org_id=user.org_id, investigation_id=None, actor_id=user.id, actor_type="user", action="CREDENTIAL_ROTATED", target_type="User", target_id=user.id, occurred_at=datetime.now(timezone.utc), metadata_={"initial_rotation": True}))
         return self.users.save(user)

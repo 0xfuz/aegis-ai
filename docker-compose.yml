@@ -34,7 +34,7 @@ services:
       - aegis_network
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama@sha256:4dea9fb511947e24a84237bb636b0203abcb2ff0d3fbc7b4ff865deb91362131
     restart: unless-stopped
     ports:
       - "11434:11434"
@@ -51,13 +51,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis_ai}
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
+      INTELLIGENCE_EXECUTION_ENABLED: ${INTELLIGENCE_EXECUTION_ENABLED:-false}
+      INTELLIGENCE_DISPATCH_ENABLED: ${INTELLIGENCE_DISPATCH_ENABLED:-false}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-CHANGE_ME_dev_only_insecure_secret}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DEBUG: ${DEBUG:-true}
@@ -80,6 +82,27 @@ services:
     networks:
       - aegis_network
 
+  # The sole schema/bootstrap writer. API, worker and beat only start after
+  # this one-shot boundary has completed, preventing concurrent migration or
+  # seed races during a Compose bring-up.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: "no"
+    command: ["sh", "-c", "alembic upgrade head && python -m app.seed.bootstrap"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis_ai}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-CHANGE_ME_dev_only_insecure_secret}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
+    networks:
+      - aegis_network
+
   frontend:
     build:
       context: ./frontend
@@ -93,6 +116,52 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - aegis_network
+
+  intelligence-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.intelligence_celery:celery_app", "worker", "--loglevel=INFO", "--queues=intelligence-execution", "--concurrency=1", "--prefetch-multiplier=1"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis_ai}
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      INTELLIGENCE_EXECUTION_ENABLED: ${INTELLIGENCE_EXECUTION_ENABLED:-false}
+      INTELLIGENCE_DISPATCH_ENABLED: ${INTELLIGENCE_DISPATCH_ENABLED:-false}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-CHANGE_ME_dev_only_insecure_secret}
+    networks:
+      - aegis_network
+
+  intelligence-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.intelligence_celery:celery_app", "beat", "--loglevel=INFO"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis_ai}
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      INTELLIGENCE_EXECUTION_ENABLED: ${INTELLIGENCE_EXECUTION_ENABLED:-false}
+      INTELLIGENCE_DISPATCH_ENABLED: ${INTELLIGENCE_DISPATCH_ENABLED:-false}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-CHANGE_ME_dev_only_insecure_secret}
     networks:
       - aegis_network
 

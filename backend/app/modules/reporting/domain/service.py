@@ -13,6 +13,8 @@ page and severity color accents; Markdown stays terse and copy-pasteable).
 """
 from datetime import datetime, timezone
 from io import BytesIO
+import re
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import LETTER
@@ -35,6 +37,11 @@ REPORT_TYPES = {"executive", "technical"}
 REPORT_FORMATS = {"markdown", "pdf"}
 
 
+def _pdf_text(value: object) -> str:
+    """ReportLab Paragraph accepts markup; persisted values must remain text."""
+    return escape(str(value or ""))
+
+
 class ReportService:
     def generate(self, investigation: Investigation, report_type: str, report_format: str) -> tuple[bytes, str, str]:
         """Returns (content_bytes, media_type, filename)."""
@@ -43,7 +50,7 @@ class ReportService:
         if report_format not in REPORT_FORMATS:
             raise ValidationError(f"Invalid format '{report_format}'. Must be one of: {', '.join(REPORT_FORMATS)}.")
 
-        slug = investigation.title.lower().replace(" ", "-")[:40]
+        slug = re.sub(r"[^a-z0-9]+", "-", investigation.title.lower()).strip("-")[:40] or "investigation"
         base_filename = f"{report_type}-report-{slug}"
 
         if report_format == "markdown":
@@ -163,22 +170,22 @@ class ReportService:
 
         story = [
             Paragraph(f"{'Executive' if report_type == 'executive' else 'Technical'} Report", meta_style),
-            Paragraph(inv.title, title_style),
+            Paragraph(_pdf_text(inv.title), title_style),
             Paragraph(
                 f'<font color="{severity_color.hexval()}"><b>{inv.severity.value.upper()}</b></font> '
                 f"&nbsp;•&nbsp; {inv.status.value.replace('_', ' ').title()} &nbsp;•&nbsp; "
-                f"Source: {inv.source} &nbsp;•&nbsp; Generated {generated_at}",
+                f"Source: {_pdf_text(inv.source)} &nbsp;•&nbsp; Generated {generated_at}",
                 meta_style,
             ),
             Spacer(1, 12),
             Paragraph("Root Cause", heading_style),
-            Paragraph(inv.root_cause or "Not yet determined.", body_style),
+            Paragraph(_pdf_text(inv.root_cause or "Not yet determined."), body_style),
         ]
 
         if report_type == "executive":
             story += [
                 Paragraph("Business Impact", heading_style),
-                Paragraph(inv.blast_radius_summary or "Not yet assessed.", body_style),
+                Paragraph(_pdf_text(inv.blast_radius_summary or "Not yet assessed."), body_style),
                 Paragraph("Recommended Actions", heading_style),
             ]
             if inv.recommended_actions:
@@ -213,9 +220,9 @@ class ReportService:
         else:
             story += [
                 Paragraph("MITRE ATT&CK Techniques", heading_style),
-                Paragraph(", ".join(inv.mitre_techniques) or "None identified.", body_style),
+                Paragraph(_pdf_text(", ".join(inv.mitre_techniques) or "None identified."), body_style),
                 Paragraph("Blast Radius", heading_style),
-                Paragraph(inv.blast_radius_summary or "Not yet assessed.", body_style),
+                Paragraph(_pdf_text(inv.blast_radius_summary or "Not yet assessed."), body_style),
                 Paragraph("Indicators of Compromise", heading_style),
             ]
             if inv.evidence:
@@ -242,7 +249,7 @@ class ReportService:
             if inv.timeline_events:
                 for event in sorted(inv.timeline_events, key=lambda e: e.occurred_at):
                     ts = event.occurred_at.strftime("%Y-%m-%d %H:%M UTC")
-                    story.append(Paragraph(f"<b>{ts}</b> — {event.description}", body_style))
+                    story.append(Paragraph(f"<b>{ts}</b> — {_pdf_text(event.description)}", body_style))
             else:
                 story.append(Paragraph("No timeline events recorded.", body_style))
 
@@ -250,7 +257,7 @@ class ReportService:
             if inv.notes:
                 for note in inv.notes:
                     ts = note.created_at.strftime("%Y-%m-%d %H:%M UTC")
-                    story.append(Paragraph(f"<b>{ts}</b> — {note.body}", body_style))
+                    story.append(Paragraph(f"<b>{ts}</b> — {_pdf_text(note.body)}", body_style))
             else:
                 story.append(Paragraph("No notes recorded.", body_style))
 

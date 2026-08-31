@@ -60,13 +60,13 @@ class DemoInvestigationService:
         event = self.db.scalars(select(Event).where(Event.org_id == org_id, Event.investigation_id == investigation.id).order_by(Event.timestamp)).first()
         if event is None: return
         snapshot = {"demo": True, "investigation_id": str(investigation.id)}
-        analysis = IntelligenceAnalysis(org_id=org_id, investigation_id=investigation.id, provider="demo", model="repository-owned-synthetic", prompt_template_version="demo-v1", input_snapshot=snapshot, input_hash=hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest(), status="COMPLETED", generated_at=datetime.now(timezone.utc))
+        analysis = IntelligenceAnalysis(org_id=org_id, investigation_id=investigation.id, provider="demo", model="repository-owned-synthetic", prompt_template_version="demo-v1", input_snapshot=snapshot, input_hash=hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest(), request_key=f"demo:{investigation.id}", output_schema_version="aiie-output-v1", status="COMPLETED", generated_at=datetime.now(timezone.utc))
         self.db.add(analysis); self.db.flush()
-        summary = IntelligenceItem(org_id=org_id, analysis_id=analysis.id, investigation_id=investigation.id, kind="SUMMARY", ordinal=0, statement=investigation.root_cause, confidence=92, payload={}, review_status="APPROVED", reviewed_by_id=user_id, reviewed_at=datetime.now(timezone.utc), review_rationale="Repository-owned demo approved for training.")
-        finding = IntelligenceItem(org_id=org_id, analysis_id=analysis.id, investigation_id=investigation.id, kind="OBSERVATION", ordinal=0, statement="Synthetic canonical event supports the training finding.", confidence=92, payload={}, review_status="APPROVED", reviewed_by_id=user_id, reviewed_at=datetime.now(timezone.utc), review_rationale="Repository-owned demo approved for training.")
+        summary = IntelligenceItem(org_id=org_id, analysis_id=analysis.id, investigation_id=investigation.id, kind="INFERENCE", origin="AI", ordinal=0, statement=investigation.root_cause, confidence=92, payload={}, review_status="CONFIRMED", reviewed_by_id=user_id, reviewed_at=datetime.now(timezone.utc), review_rationale="Repository-owned demo approved for training.")
+        finding = IntelligenceItem(org_id=org_id, analysis_id=analysis.id, investigation_id=investigation.id, kind="OBSERVATION", origin="AI", ordinal=0, statement="Synthetic canonical event supports the training finding.", confidence=92, payload={}, review_status="CONFIRMED", reviewed_by_id=user_id, reviewed_at=datetime.now(timezone.utc), review_rationale="Repository-owned demo approved for training.")
         self.db.add_all([summary, finding]); self.db.flush()
         self.db.add(IntelligenceFactLink(org_id=org_id, item_id=finding.id, fact_type="FACT", fact_id=event.id, role="SUPPORTS"))
-        self.db.add(IntelligenceReviewEvent(org_id=org_id, item_id=finding.id, from_status="UNREVIEWED", to_status="APPROVED", reviewer_id=user_id, rationale="Repository-owned demo approved for training."))
+        self.db.add(IntelligenceReviewEvent(org_id=org_id, item_id=finding.id, from_status="PENDING", to_status="CONFIRMED", reviewer_id=user_id, rationale="Repository-owned demo approved for training."))
         self.db.add(AuditEvent(org_id=org_id, investigation_id=investigation.id, actor_id=user_id, actor_type="user", action="DEMO_INTELLIGENCE_APPROVED", target_type="IntelligenceItem", target_id=finding.id, occurred_at=datetime.now(timezone.utc)))
 
     def delete(self, org_id: UUID, scenario_id: str):

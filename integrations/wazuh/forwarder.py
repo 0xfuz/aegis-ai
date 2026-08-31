@@ -19,6 +19,22 @@ class SpoolFullError(RuntimeError): pass
 class ForwarderConfigError(ValueError): pass
 
 
+def _read_ingest_secret_file(path_value: str) -> str:
+    """Read a bounded manager-mounted secret without exposing its value."""
+    path = Path(path_value)
+    try:
+        info = path.stat()
+        if not path.is_file() or not 0 < info.st_size <= 4096:
+            raise ValueError
+        value = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ForwarderConfigError("Invalid Wazuh ingest secret file.") from exc
+    value = value[:-1] if value.endswith("\n") else value
+    if not value or value.strip() != value:
+        raise ForwarderConfigError("Invalid Wazuh ingest secret file.")
+    return value
+
+
 @dataclass(frozen=True)
 class ForwarderConfig:
     base_url: str
@@ -37,11 +53,11 @@ class ForwarderConfig:
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> "ForwarderConfig":
         env = os.environ if environ is None else environ
-        required = ("AEGIS_WAZUH_BASE_URL", "AEGIS_WAZUH_CONNECTOR_ID", "AEGIS_WAZUH_INGEST_SECRET", "AEGIS_WAZUH_SPOOL_DIR")
+        required = ("AEGIS_WAZUH_BASE_URL", "AEGIS_WAZUH_CONNECTOR_ID", "AEGIS_WAZUH_INGEST_SECRET_FILE", "AEGIS_WAZUH_SPOOL_DIR")
         missing = [key for key in required if not env.get(key)]
         if missing: raise ForwarderConfigError(f"Missing required configuration: {', '.join(missing)}")
         verify = env.get("AEGIS_WAZUH_VERIFY_TLS", "true").casefold() not in {"0", "false", "no"}
-        return cls(env["AEGIS_WAZUH_BASE_URL"], env["AEGIS_WAZUH_CONNECTOR_ID"], env["AEGIS_WAZUH_INGEST_SECRET"], Path(env["AEGIS_WAZUH_SPOOL_DIR"]),
+        return cls(env["AEGIS_WAZUH_BASE_URL"], env["AEGIS_WAZUH_CONNECTOR_ID"], _read_ingest_secret_file(env["AEGIS_WAZUH_INGEST_SECRET_FILE"]), Path(env["AEGIS_WAZUH_SPOOL_DIR"]),
             float(env.get("AEGIS_WAZUH_TIMEOUT_SECONDS", "10")), float(env.get("AEGIS_WAZUH_INITIAL_DELAY_SECONDS", "5")),
             float(env.get("AEGIS_WAZUH_MAX_DELAY_SECONDS", "300")), float(env.get("AEGIS_WAZUH_MAX_RETRY_AGE_SECONDS", "86400")),
             int(env.get("AEGIS_WAZUH_MAX_ATTEMPTS", "20")), int(env.get("AEGIS_WAZUH_MAX_SPOOL_BYTES", str(100 * 1024 * 1024))), verify)

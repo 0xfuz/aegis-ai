@@ -81,6 +81,34 @@ export async function downloadFile(path: string): Promise<void> {
   window.URL.revokeObjectURL(url);
 }
 
+type ReportDownloadOptions = { signal?: AbortSignal; onDownloading?: () => void };
+
+/** Downloads only the two server-authoritative Investigation report formats. */
+export async function downloadInvestigationReport(path: string, options: ReportDownloadOptions = {}): Promise<void> {
+  const token = getAccessToken();
+  const response = await fetch(`${API_BASE_URL}${path}`, { signal: options.signal, headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new ApiError(body?.error?.message ?? body?.detail ?? "Couldn't generate that report.", response.status);
+  }
+  const mediaType = (response.headers.get("Content-Type") ?? "").split(";", 1)[0]?.toLowerCase() ?? "";
+  if (mediaType !== "text/markdown" && mediaType !== "application/pdf") {
+    throw new ApiError("The report response had an unsupported media type.", response.status);
+  }
+  const match = (response.headers.get("Content-Disposition") ?? "").match(/filename="([A-Za-z0-9][A-Za-z0-9._-]{0,127})"/);
+  if (!match) throw new ApiError("The report response had an invalid filename.", response.status);
+  options.onDownloading?.();
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = match[1]!;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
 }

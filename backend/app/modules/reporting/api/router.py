@@ -1,10 +1,13 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from app.modules.identity.api.dependencies import Principal, get_current_principal
+from app.modules.identity.api.dependencies import Principal, require_password_rotation_complete
+from app.modules.identity.infrastructure.models import User
 from app.modules.investigations.domain.service import InvestigationService
 from app.modules.reporting.domain.service import ReportService
 from app.shared.database import get_db
@@ -23,11 +26,14 @@ _REQUIRED_PERMISSION = {
 @router.get("/{investigation_id}/report")
 def generate_report(
     investigation_id: UUID,
-    type: str = Query(default="technical", description="'executive' or 'technical'"),
-    format: str = Query(default="markdown", description="'markdown' or 'pdf'"),
-    principal: Principal = Depends(get_current_principal),
+    request: Request,
+    type: Literal["executive", "technical"] = Query(default="technical", description="'executive' or 'technical'"),
+    format: Literal["markdown", "pdf"] = Query(default="markdown", description="'markdown' or 'pdf'"),
+    principal: Principal = Depends(require_password_rotation_complete),
     db: Session = Depends(get_db),
 ) -> Response:
+    if set(request.query_params) - {"type", "format"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid report query parameters.")
     required_permission = _REQUIRED_PERMISSION.get(type, "reports:generate_technical")
     if not principal.has_permission(required_permission):
         raise HTTPException(
@@ -35,6 +41,10 @@ def generate_report(
             detail=f"This action requires the '{required_permission}' permission.",
         )
 
+    user = db.get(User, principal.user_id)
+    if user is None or user.org_id != principal.org_id or not user.is_active:
+        # Do not reveal whether an Investigation exists to a stale principal.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found.")
     investigation = InvestigationService(db).get_investigation(principal.org_id, investigation_id)
     content, media_type, filename = ReportService().generate(investigation, type, format)
 

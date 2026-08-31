@@ -2,6 +2,7 @@
 
 import { ConfidenceRing } from "@/components/ui/confidence-ring";
 import { cn } from "@/lib/utils";
+import { mitreTechniqueName } from "@/lib/mitre-technique-catalog";
 
 interface AttackChainStep {
   phase: string;
@@ -110,8 +111,8 @@ export function AIReasoningPanel({
             </div>
           )}
 
-          <div className="mb-1 text-xs text-text-muted">MITRE mapping</div>
-          <p className="mb-4 font-mono text-xs text-text-primary">{mitreTechniques.join(", ") || "None identified"}</p>
+          <div className="mb-1 text-xs text-text-muted">AI-suggested MITRE techniques</div>
+          <ul className="mb-4 space-y-1 text-xs text-text-primary" aria-label="AI-suggested MITRE techniques">{mitreTechniques.length ? mitreTechniques.map((technique) => <li key={technique}><span className="font-mono">{technique}</span>{mitreTechniqueName(technique) ? ` — ${mitreTechniqueName(technique)}` : " — Name unavailable in this bounded catalog"}</li>) : <li>None identified</li>}</ul>
 
           <div className="mb-1 text-xs text-text-muted">Blast radius</div>
           <p className="mb-4 text-xs text-text-primary">{blastRadiusSummary}</p>

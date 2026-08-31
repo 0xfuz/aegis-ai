@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Wazuh custom integration wrapper. Configuration and the ingest secret stay
+# in root-managed files; this wrapper never accepts or prints a secret.
+set -euo pipefail
+umask 077
+
+readonly CONFIG_FILE="${AEGIS_WAZUH_CONFIG_FILE:-/etc/aegis/wazuh-forwarder.conf}"
+readonly FORWARDER="${AEGIS_WAZUH_FORWARDER:-/opt/aegis/integrations/wazuh/forwarder.py}"
+
+if [[ "$#" -lt 1 || ! -r "$CONFIG_FILE" || ! -r "$FORWARDER" ]]; then
+  exit 64
+fi
+
+# Wazuh 4.9.2 may append integration arguments configured by the Manager.
+# Select exactly one readable regular file as the Manager-provided alert
+# artifact; never treat those extra arguments as configuration or credentials.
+ALERT_FILE=""
+for candidate in "$@"; do
+  if [[ -f "$candidate" && -r "$candidate" ]]; then
+    [[ -z "$ALERT_FILE" ]] || exit 64
+    ALERT_FILE="$candidate"
+  fi
+done
+[[ -n "$ALERT_FILE" ]] || exit 64
+
+# shellcheck disable=SC1090
+set -a
+source "$CONFIG_FILE"
+set +a
+
+case "${AEGIS_WAZUH_BASE_URL:-}" in
+  https://*) ;;
+  *) exit 65 ;;
+esac
+[[ -n "${AEGIS_WAZUH_INGEST_SECRET_FILE:-}" && -r "${AEGIS_WAZUH_INGEST_SECRET_FILE}" ]] || exit 66
+exec /usr/bin/python3 "$FORWARDER" "$ALERT_FILE"

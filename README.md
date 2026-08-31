@@ -1,113 +1,111 @@
-# Aegis AI — Phase 1 (Foundations)
+<p align="center">
+  <img src="docs/assets/branding/aegis-ai-logo.png" alt="Aegis AI" width="420">
+</p>
 
-AI-Powered Security Decision Engine. This phase ships the monorepo scaffolding,
-database schema, authentication, and RBAC that every later module (Investigations,
-AI Reasoning, Attack Graph, Reporting, …) builds on top of.
+<h1 align="center">Aegis AI</h1>
 
-See `AEGIS_AI_ARCHITECTURE.md` and `AEGIS_AI_UIUX_SPEC.md` (shared earlier in this
-build) for the full system design this scaffolding implements.
+<p align="center">A self-hosted, evidence-first investigation and decision layer for security telemetry.</p>
 
-## What's in Phase 1
+Aegis AI sits above telemetry sources such as Wazuh. It turns authorized input into durable investigation context: evidence provenance, canonical alerts, explainable reconstruction, and analyst-controlled decisions. It is intended for controlled pilot use, not a public service. The boundaries are deliberate: correlation and triage are persisted rather than recomputed in the browser, and AI output remains a reviewable suggestion rather than security authority.
 
-- **Monorepo**: `backend/` (FastAPI, clean architecture) + `frontend/` (Next.js/TS)
-- **Database schema**: organizations, users, roles, permissions, role-permission
-  mapping, revoked-token list — via Alembic migration `0001`
-- **Authentication**: JWT access (30 min) + refresh (7 day, rotated on use,
-  individually revocable) token pairs
-- **RBAC**: five baseline roles (`soc_analyst`, `incident_responder`,
-  `security_architect`, `ciso`, `admin`), each mapped to a fixed permission set
-  seeded on startup
-- **Backend foundation**: DI-based FastAPI app, repository + service layers,
-  centralized exception handling, auto-generated OpenAPI docs
-- **Frontend foundation**: Next.js App Router, Tailwind theme matching the design
-  system, auth context with silent token refresh, sidebar/topbar shell, login flow
+> **Independent project notice:** Aegis AI is an independent personal project. It is not an official Wazuh product and is not affiliated with Wazuh. Wazuh 4.9.2 is the only external integration validated end-to-end.
 
-## Quick start
+The current candidate is `v1.0.0-rc1`. It is not a final v1.0.0 announcement. The preserved V1-B3 single-machine revalidation accepted 280 of 300 returned workload requests at five events per second and did not complete the required workload. No throughput envelope, production-scale, Enterprise, high-availability, SaaS, or compliance claim is made.
 
-```bash
-cp .env.example .env
-# edit .env if you want non-default ports/credentials — the defaults work as-is
+## Product walkthrough
 
-docker compose up --build
-```
+### 1. Investigation Overview
 
-- Frontend: http://localhost:3000 (redirects to `/login`)
-- Backend API docs: http://localhost:8000/api/docs
-- Demo login: `admin@aegis.demo` / `ChangeMe123!` (seeded automatically on first boot)
+![Investigation Overview showing persisted record counts and an authoritative summary](docs/assets/screenshots/overview.png)
 
-The backend entrypoint waits for Postgres, runs migrations, seeds baseline
-roles/permissions/demo org/admin user, then starts the API — `docker compose up`
-alone gets you to a working login on a clean checkout.
+*Persisted investigation counts and authoritative record summary.* The Overview summarizes stored Investigation records; it does not recalculate correlation, triage, or AI conclusions.
 
-## Repo layout
+### 2. Evidence
 
-```
-aegis-ai/
-  backend/
-    app/
-      core/            # config, JWT security primitives, logging
-      shared/           # DB session, declarative Base + mixins, exception hierarchy
-      modules/
-        identity/       # auth, users, roles, permissions — the only module built so far
-          domain/        # service layer (business logic)
-          infrastructure/# SQLAlchemy models + repositories
-          api/            # FastAPI router, schemas, RBAC dependencies
-      seed/             # idempotent baseline data seeding
-    alembic/            # migrations
-    tests/              # pytest — unit (security) + integration (auth API)
-  frontend/
-    app/
-      login/
-      (dashboard)/      # authenticated route group — sidebar + topbar shell
-    components/
-      ui/               # Button, Input, Card primitives
-      layout/           # Sidebar, Topbar
-    lib/
-      api-client.ts     # fetch wrapper with silent 401 → refresh → retry
-      auth-context.tsx  # login/logout/current-user React context
-  docker-compose.yml
-  .env.example
-```
+![Evidence inventory showing parse status, derived records, provenance, and controlled download access](docs/assets/screenshots/evidence.png)
 
-Every later module (`investigations`, `ai_reasoning`, `attack_graph`, `reporting`, …)
-follows the exact same `domain/infrastructure/api` shape as `identity` — that
-consistency is what the architecture doc means by "every module must be
-independent."
+*Authorized evidence inventory with parse status and derived records.* Evidence metadata, parsing state, derived counts, provenance, and download access are bounded by the authorized evidence workflow.
 
-## Design decisions worth knowing about
+### 3. Timeline
 
-- **Token strategy**: access tokens are short-lived and carry the caller's
-  flattened permission list, so most requests authorize with zero DB round
-  trips. Refresh tokens are rotated on every use and individually revocable via
-  the `revoked_tokens` table (logout invalidates that specific session, not
-  every session).
-- **RBAC is enforced at the API layer**, not just hidden in the UI — every
-  sensitive backend endpoint requires a specific permission or role via FastAPI
-  `Depends`, so hiding a button client-side is a UX nicety, not a security
-  boundary.
-- **Multi-tenancy** is `org_id`-scoped at the application layer for now
-  (every repository method takes/filters by `org_id`). Postgres row-level
-  security policies are a documented hardening step once the schema has
-  settled across more modules, not a Phase 1 requirement.
-- **Frontend auth storage**: tokens live in `localStorage`, not cookies, so
-  `middleware.ts` is honestly a no-op placeholder — real route protection
-  happens client-side via `AuthProvider` once `/auth/me` resolves. If this
-  later moves to httpOnly cookie sessions (recommended before a real
-  production launch, since httpOnly cookies aren't readable by XSS), that
-  file is where server-side verification would go.
-- **No connector modules exist yet, by design** — Phase 1 has nothing for
-  Sentinel/Splunk/Elastic/CrowdStrike/cloud APIs to plug into. That's correct:
-  those arrive as the `connectors` module in the MVP build, and per the
-  architecture doc, each will be a swappable adapter behind a common interface.
+![Canonical Timeline showing server-authoritative source-time order and bounded provenance workflow](docs/assets/screenshots/timeline.png)
 
-## Running tests
+*Server-authoritative timeline with bounded provenance inspection.* Normalized events retain the server's source-time order and link back to the authorized evidence workflow.
 
-```bash
-docker compose exec backend pytest
-```
+### 4. Attack Graph
 
-## What's next
+![Canonical Attack Graph showing factual entity and occurrence-backed indicator nodes with persisted relationships](docs/assets/screenshots/attack-graph.png)
 
-Per the agreed MVP scope: Investigations module (the core case object) and its
-dashboard/workspace UI, using mock security event data — no external SIEM/EDR/cloud
-integrations until v2.
+*Canonical factual graph with persisted relationships and bounded provenance.* The graph displays factual entity nodes, occurrence-backed indicators, and persisted directional relationships. It never upgrades AI suggestions into facts.
+
+### 5. Audit Trail
+
+![Audit Trail showing chronological actors, targets, and safe state transitions](docs/assets/screenshots/audit-trail.png)
+
+*Chronological audit events with recorded actors, targets, and safe transitions.* A queued Intelligence Run can, for example, move safely to cancelled; the record remains an audit event rather than a claim of completed AI analysis.
+
+## What the product preserves
+
+- **Evidence and provenance:** authorized evidence metadata and controlled access stay linked to the Investigation workflow.
+- **Canonical alerts:** normalized alerts use deterministic deduplication, then correlation-v2 stores its reasons with the resulting membership. Triage is persisted state, not a client-side calculation.
+- **Analyst authority:** analysts control Investigation promotion, Findings, canonical MITRE mappings, and actions. Findings and MITRE mappings are separately reviewed.
+- **Factual workspaces:** Timeline, Entities, Indicators, and the Attack Graph present bounded persisted records and relationships.
+- **Reports and audit:** per-Investigation reports use authoritative records, and chronological audit events retain actors, targets, and safe transitions.
+- **Optional AI:** bounded local AI execution can produce reviewable, citation-linked claims. Claims cannot rewrite canonical facts or automatically create Findings, MITRE mappings, or actions.
+
+Core mode works without Wazuh and without Ollama. Wazuh and local Ollama remain optional evaluator paths after a healthy Core installation.
+
+## Choose your path
+
+| Path | Starts | Use it when |
+| --- | --- | --- |
+| **Quick evaluation — Core mode** | PostgreSQL, Redis, migration, API, and frontend | You want to assess the product without a Wazuh Manager, Ollama, worker, or AI execution. |
+| **Full Wazuh integration** | Core mode plus the separately configured authenticated TLS forwarder and Wazuh Manager integration | You are evaluating the only end-to-end validated external integration; start from the [Wazuh evaluator guide](docs/release/WAZUH_EVALUATOR_GUIDE.md). |
+| **Local AI evaluation** | Explicitly enabled Ollama profile and bounded intelligence worker execution | You have completed Core mode and deliberately want reviewable AI suggestions; start from the [local AI evaluator guide](docs/release/LOCAL_AI_EVALUATOR_GUIDE.md). |
+
+## Documentation
+
+- [Core deployment quickstart](docs/release/DEPLOYMENT_QUICKSTART.md)
+- [Private evaluator checklist](docs/release/PRIVATE_EVALUATOR_CHECKLIST.md)
+- [Architecture overview](docs/ARCHITECTURE.md)
+- [Local AI evaluator guide](docs/release/LOCAL_AI_EVALUATOR_GUIDE.md)
+- [Wazuh evaluator guide](docs/release/WAZUH_EVALUATOR_GUIDE.md)
+- [Production administrator bootstrap and recovery](docs/release/PRODUCTION_ADMIN_BOOTSTRAP.md)
+- [Backup and recovery](docs/release/BACKUP_AND_RECOVERY.md)
+- [Contributing](CONTRIBUTING.md)
+
+Both optional paths require a healthy Core installation first.
+
+## Prerequisites
+
+| Requirement | Core mode | Full Wazuh / local AI |
+| --- | --- | --- |
+| Host | Supported Linux host running Docker Engine and Docker Compose v2 | Same; Wazuh and Ollama are separately operated optional components. |
+| Tools | Git, `openssl`, `curl`, and a non-echoing terminal prompt | Same. |
+| Ports | Loopback `13000` (frontend) and `18000` (API) in the documented example; choose unused loopback ports if necessary. | Wazuh/forwarder and Ollama use their documented private network contracts; they are not started by Core mode. |
+| Memory | No minimum or recommended capacity is certified. The pilot harness safety floor was 2 GiB `MemAvailable`; it is a stop condition, not a deployment guarantee. | Plan capacity independently; no supported rate follows from the failed performance campaign. |
+| Disk | Keep at least 15 GiB free for the documented pilot safety floor. This is not a throughput or production-sizing claim. | Allow additional space for separately managed Wazuh data and an existing Ollama model volume. |
+
+## Authority and scope
+
+The verified path is:
+
+`Wazuh → durable forwarder → authenticated webhook → RawEvent → CanonicalAlert → deduplication → correlation-v2 → triage-v1 → analyst promotion → Investigation → reconstruction → grounded AI claim → typed citation → analyst review`.
+
+AI output is reviewable and citation-linked; it is never automatically authoritative. Analysts control promotion, Findings, canonical MITRE confirmation, and actions. AI-suggested MITRE techniques are not canonical mappings or facts.
+
+Aegis AI is not an Enterprise SIEM replacement, universal connector platform, supported Splunk/Sentinel/Elastic integration, autonomous SOC, compliance-certified product, or public SaaS. It has no certified zero-loss rate at five events per second.
+
+## Secure operator basics
+
+There is no fixed public administrator email or password. Every operator chooses their own first administrator and supplies secrets from protected local files. Production demo seeding and demo credentials are disabled and unsupported.
+
+Production Compose is private by default: the API and frontend bind to loopback. Put an operator-managed, TLS-terminating reverse proxy in front of them only when access beyond the host is required. Do not expose databases, Redis, workers, or secret files.
+
+For exact operations, see [production deployment](docs/release/PRODUCTION_DEPLOYMENT.md), [administrator bootstrap and recovery](docs/release/PRODUCTION_ADMIN_BOOTSTRAP.md), [Wazuh operations](docs/release/WAZUH_OPERATIONS.md), [backup and recovery](docs/release/BACKUP_AND_RECOVERY.md), [pilot performance status](docs/release/V1_0_PILOT_PERFORMANCE.md), and [release scope](docs/release/V1_0_RELEASE.md).
+
+## Project and attribution
+
+Original repository code is licensed under [Apache-2.0](LICENSE); see [NOTICE](NOTICE) and the [production image inventory](docs/release/PRODUCTION_IMAGE_INVENTORY.md) for third-party components. Wazuh and MITRE ATT&CK names, marks, content, and licenses remain the property of their respective owners. Aegis AI does not claim their endorsement.
+
+This private repository currently has no public vulnerability-reporting channel. Do not publish vulnerabilities in issues or distribute repository access outside the owner’s verified-reviewer process.

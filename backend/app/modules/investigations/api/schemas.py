@@ -43,12 +43,29 @@ class NoteRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     author_id: UUID
-    body: str
+    body: str = Field(max_length=4000)
     created_at: datetime
+    updated_at: datetime
 
 
 class NoteCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     body: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("body")
+    @classmethod
+    def non_blank_body(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Note body must not be blank.")
+        return value
+
+
+class NotePage(BaseModel):
+    items: list[NoteRead]
+    limit: int
+    offset: int
+    total: int
 
 
 class RecommendedActionRead(BaseModel):
@@ -76,6 +93,62 @@ class InvestigationSummary(BaseModel):
     status: str
     confidence: int
     created_at: datetime
+
+
+class InvestigationPage(BaseModel):
+    """Bounded, server-ordered Case list for operational UI consumers."""
+
+    items: list[InvestigationSummary]
+    limit: int
+    offset: int
+    returned_count: int
+    total: int
+
+
+class InvestigationOverviewIdentity(BaseModel):
+    id: UUID
+    title: str = Field(max_length=255)
+    source: str = Field(max_length=100)
+    severity: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class InvestigationOverviewCounts(BaseModel):
+    evidence_items: int
+    raw_records: int
+    events: int
+    entities: int
+    indicator_occurrences: int
+    relationships: int
+    findings: int
+    confirmed_mitre_mappings: int
+    intelligence_runs: int
+
+
+class InvestigationOverview(BaseModel):
+    """Bounded factual summary for one Investigation workspace.
+
+    This deliberately contains aggregate counts only.  Raw evidence, legacy
+    AI fields, audit metadata, and prompt/provider material remain behind
+    their own bounded, authorized read contracts.
+    """
+
+    investigation: InvestigationOverviewIdentity
+    counts: InvestigationOverviewCounts
+
+
+class MitreSuggestionRead(BaseModel):
+    technique_id: str = Field(max_length=20)
+    technique_name: str | None = Field(default=None, max_length=255)
+    origin: str = "AI_SUGGESTION"
+    review_state: str = "SUGGESTED"
+
+
+class MitreSuggestionPage(BaseModel):
+    catalog_version: str
+    items: list[MitreSuggestionRead] = Field(max_length=25)
 
 
 class InvestigationDetail(BaseModel):
@@ -201,3 +274,43 @@ class DashboardSummary(BaseModel):
     critical_open: int
     avg_false_positive_probability: float
     total_investigations: int
+    window: "DashboardWindowRead | None" = None
+
+
+class DashboardWindowRead(BaseModel):
+    """UTC [from, to) scope used for every Dashboard aggregate."""
+
+    preset: str | None = None
+    from_at: datetime
+    to_at: datetime
+
+
+class AuditActorRead(BaseModel):
+    type: str
+    id: UUID | None
+
+
+class AuditTargetRead(BaseModel):
+    type: str
+    id: UUID
+
+
+class AuditTransitionRead(BaseModel):
+    from_: str | None = Field(alias="from")
+    to: str | None
+
+
+class AuditEventRead(BaseModel):
+    id: UUID
+    event_type: str
+    occurred_at: datetime
+    actor: AuditActorRead
+    target: AuditTargetRead
+    transition: AuditTransitionRead | None
+
+
+class AuditEventPage(BaseModel):
+    items: list[AuditEventRead]
+    limit: int
+    offset: int
+    total: int

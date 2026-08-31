@@ -4,8 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  BarChart3,
-  FileText,
   LayoutDashboard,
   Settings,
   ShieldAlert,
@@ -17,17 +15,13 @@ import { cn } from "@/lib/utils";
 
 const GLOBAL_SECTIONS = [
   { label: "Operations", items: [
-    { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { label: "Cases", href: "/investigations", icon: ShieldAlert },
+    { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "investigation:read" },
+    { label: "Cases", href: "/investigations", icon: ShieldAlert, permission: "investigation:read" },
+    { label: "Alert Triage", href: "/alert-triage", icon: ShieldAlert, permission: "investigation:read" },
   ] },
   { label: "Security / Platform", items: [
-    { label: "Assets", href: "/assets", icon: ShieldAlert },
-    { label: "Detections", href: "/detections", icon: ShieldAlert },
-    { label: "Threat Intelligence", href: "/threat-intel", icon: ShieldAlert },
-  ] },
-  { label: "Workspace", items: [
-    { label: "Reports", href: "/reports", icon: FileText },
-    { label: "Analytics", href: "/analytics", icon: BarChart3 },
+    { label: "Assets", href: "/assets", icon: ShieldAlert, permission: "assets:read" },
+    { label: "Threat Intelligence", href: "/threat-intel", icon: ShieldAlert, permission: "threat_intel:read" },
   ] },
 ] as const;
 
@@ -37,7 +31,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const isAdmin = user?.role.name === "admin";
   const [openCount, setOpenCount] = useState<number | null>(null);
 
@@ -49,7 +43,7 @@ export function Sidebar() {
   }, [user]);
 
   const linkClass = (active: boolean) => cn(
-    "flex items-center gap-3 rounded px-3 py-2 text-sm transition-colors",
+    "flex items-center gap-3 rounded px-3 py-2 text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-signal",
     active ? "border-l-2 border-signal bg-surface-raised text-signal" : "text-text-muted hover:bg-surface-raised hover:text-text-primary",
   );
 
@@ -57,9 +51,11 @@ export function Sidebar() {
     <aside className="flex h-screen w-60 flex-shrink-0 flex-col border-r border-hairline bg-surface">
       <div className="px-4 py-5 font-display text-lg font-medium">Aegis AI</div>
       <nav className="flex-1 space-y-3 px-2" aria-label="Primary navigation">
-        {GLOBAL_SECTIONS.slice(0, 1).map((section) => <div key={section.label}><SectionLabel>{section.label}</SectionLabel>{section.items.map((item) => { const Icon = item.icon; const active = item.href === "/investigations" ? pathname === "/investigations" : pathname?.startsWith(item.href); return <Link key={item.href} href={item.href} className={linkClass(Boolean(active))}><Icon size={16} aria-hidden /><span className="flex-1">{item.label}</span>{item.label === "Cases" && openCount !== null && openCount > 0 && <span className="rounded-full bg-severity-critical px-1.5 text-[10px] text-white">{openCount}</span>}</Link>; })}</div>)}
-
-        {GLOBAL_SECTIONS.slice(1).map((section) => <div key={section.label}><SectionLabel>{section.label}</SectionLabel>{section.items.map((item) => { const Icon = item.icon; return <Link key={item.href} href={item.href} className={linkClass(Boolean(pathname?.startsWith(item.href)))}><Icon size={16} aria-hidden /><span>{item.label}</span></Link>; })}</div>)}
+        {GLOBAL_SECTIONS.map((section) => {
+          const items = section.items.filter((item) => hasPermission(item.permission));
+          if (items.length === 0) return null;
+          return <div key={section.label}><SectionLabel>{section.label}</SectionLabel>{items.map((item) => { const Icon = item.icon; const active = item.href === "/investigations" ? pathname === "/investigations" : pathname?.startsWith(item.href); return <Link key={item.href} href={item.href} className={linkClass(Boolean(active))}><Icon size={16} aria-hidden /><span className="flex-1">{item.label}</span>{item.label === "Cases" && openCount !== null && openCount > 0 && <span className="rounded-full bg-severity-critical px-1.5 text-[10px] text-white">{openCount}</span>}</Link>; })}</div>;
+        })}
 
         {isAdmin && <><div className="my-2 border-t border-hairline" /><Link href="/settings" className={linkClass(Boolean(pathname?.startsWith("/settings")))}><Settings size={16} aria-hidden />Settings</Link><Link href="/user-management" className={linkClass(Boolean(pathname?.startsWith("/user-management")))}><Users size={16} aria-hidden />User management</Link></>}
       </nav>

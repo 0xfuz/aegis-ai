@@ -50,7 +50,7 @@ class InvestigationRepository:
         stmt = (
             select(Investigation)
             .where(Investigation.org_id == org_id)
-            .order_by(Investigation.created_at.desc())
+            .order_by(Investigation.created_at.desc(), Investigation.id.desc())
             .limit(limit)
             .offset(offset)
         )
@@ -58,13 +58,23 @@ class InvestigationRepository:
             stmt = stmt.where(Investigation.status == status)
         return list(self.db.execute(stmt).scalars().all())
 
-    def count_by_org(self, org_id: UUID, status: InvestigationStatus | None = None) -> int:
+    def count_by_org(
+        self,
+        org_id: UUID,
+        status: InvestigationStatus | None = None,
+        from_at: datetime | None = None,
+        to_at: datetime | None = None,
+    ) -> int:
         stmt = select(func.count()).select_from(Investigation).where(Investigation.org_id == org_id)
         if status is not None:
             stmt = stmt.where(Investigation.status == status)
+        if from_at is not None:
+            stmt = stmt.where(Investigation.created_at >= from_at)
+        if to_at is not None:
+            stmt = stmt.where(Investigation.created_at < to_at)
         return self.db.execute(stmt).scalar_one()
 
-    def count_open(self, org_id: UUID) -> int:
+    def count_open(self, org_id: UUID, from_at: datetime | None = None, to_at: datetime | None = None) -> int:
         stmt = (
             select(func.count())
             .select_from(Investigation)
@@ -73,9 +83,13 @@ class InvestigationRepository:
                 Investigation.status != InvestigationStatus.RESOLVED,
             )
         )
+        if from_at is not None:
+            stmt = stmt.where(Investigation.created_at >= from_at)
+        if to_at is not None:
+            stmt = stmt.where(Investigation.created_at < to_at)
         return self.db.execute(stmt).scalar_one()
 
-    def count_critical_open(self, org_id: UUID) -> int:
+    def count_critical_open(self, org_id: UUID, from_at: datetime | None = None, to_at: datetime | None = None) -> int:
         from app.modules.investigations.infrastructure.models import Severity
 
         stmt = (
@@ -87,12 +101,22 @@ class InvestigationRepository:
                 Investigation.status != InvestigationStatus.RESOLVED,
             )
         )
+        if from_at is not None:
+            stmt = stmt.where(Investigation.created_at >= from_at)
+        if to_at is not None:
+            stmt = stmt.where(Investigation.created_at < to_at)
         return self.db.execute(stmt).scalar_one()
 
-    def avg_false_positive_probability(self, org_id: UUID) -> float:
+    def avg_false_positive_probability(
+        self, org_id: UUID, from_at: datetime | None = None, to_at: datetime | None = None
+    ) -> float:
         stmt = select(func.avg(Investigation.false_positive_probability)).where(
             Investigation.org_id == org_id
         )
+        if from_at is not None:
+            stmt = stmt.where(Investigation.created_at >= from_at)
+        if to_at is not None:
+            stmt = stmt.where(Investigation.created_at < to_at)
         result = self.db.execute(stmt).scalar_one()
         return float(result) if result is not None else 0.0
 

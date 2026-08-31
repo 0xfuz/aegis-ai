@@ -24,9 +24,12 @@ def test_production_rejects_default_security_configuration():
         Settings(ENVIRONMENT="production", DEBUG=True, JWT_SECRET_KEY="non-default", DATABASE_URL="postgresql+psycopg2://user:strong@db:5432/app")
 
 
-def test_production_accepts_explicit_nondefault_configuration():
+def test_production_accepts_file_backed_nondefault_configuration(tmp_path):
+    jwt_file = tmp_path / "jwt"; jwt_file.write_text("R1-test-JWT-signing-secret-value-123456!", encoding="utf-8")
+    database_file = tmp_path / "database"; database_file.write_text("R1-test-database-password-123456!", encoding="utf-8")
     settings = Settings(ENVIRONMENT="production", DEBUG=False, SEED_DEMO_DATA=False,
-        JWT_SECRET_KEY="test-only-non-default-secret", DATABASE_URL="postgresql+psycopg2://user:strong@db:5432/app")
+        JWT_SECRET_KEY_FILE=str(jwt_file), DATABASE_PASSWORD_FILE=str(database_file),
+        DATABASE_USER="user", DATABASE_NAME="app", DATABASE_HOST="db")
     assert settings.ENVIRONMENT == "production"
 
 

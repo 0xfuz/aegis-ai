@@ -2,9 +2,10 @@
 Application services for the investigations module. Routers call these —
 never the repository or DB session directly.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.investigations.infrastructure.models import (
@@ -17,6 +18,7 @@ from app.modules.investigations.infrastructure.models import (
 from app.modules.investigations.infrastructure.repository import InvestigationRepository, IOCRepository
 from app.modules.investigations.api.schemas import (
     DashboardSummary,
+    DashboardWindowRead,
     EvidenceRecordRead,
     IOCDetail,
     RelatedInvestigation,
@@ -25,6 +27,8 @@ from app.shared.exceptions import NotFoundError, ValidationError
 
 _VALID_IOC_TYPES = {"ip", "hash", "domain", "url", "asset"}
 _VALID_IOC_VERDICTS = {"malicious", "suspicious", "unknown", "benign"}
+_DASHBOARD_PRESETS = {"24h": timedelta(hours=24), "7d": timedelta(days=7), "30d": timedelta(days=30)}
+_MAX_DASHBOARD_RANGE = timedelta(days=90)
 
 # Valid forward/backward moves on the Case Status Track. Kept explicit
 # rather than allowing any-to-any status changes, since the UX spec's
@@ -44,15 +48,77 @@ class InvestigationService:
         self.db = db
         self.repo = InvestigationRepository(db)
 
-    def list_investigations(self, org_id: UUID, status: str | None, limit: int, offset: int) -> list[Investigation]:
-        status_enum = self._parse_status(status) if status else None
-        return self.repo.list_by_org(org_id, status=status_enum, limit=limit, offset=offset)
+    def list_investigations(self, org_id: UUID, status: str | None, limit: int, offset: int) -> dict:
+        status_enum = self._parse_status(status) if status is not None else None
+        items = self.repo.list_by_org(org_id, status=status_enum, limit=limit, offset=offset)
+        return {"items": items, "limit": limit, "offset": offset, "returned_count": len(items),
+                "total": self.repo.count_by_org(org_id, status=status_enum)}
 
     def get_investigation(self, org_id: UUID, investigation_id: UUID) -> Investigation:
         investigation = self.repo.get_by_id(org_id, investigation_id)
         if investigation is None:
             raise NotFoundError("Investigation not found.")
         return investigation
+
+    def mitre_suggestions(self, org_id: UUID, investigation_id: UUID) -> dict:
+        """Read only persisted legacy/AI suggestion IDs; never creates mappings."""
+        from app.modules.investigations.domain.mitre_catalog import MITRE_CATALOG_VERSION, technique_name
+        investigation = self.get_investigation(org_id, investigation_id)
+        identifiers = sorted({value for value in (investigation.mitre_techniques or []) if isinstance(value, str) and 1 <= len(value) <= 20})[:25]
+        return {"catalog_version": MITRE_CATALOG_VERSION, "items": [
+            {"technique_id": value, "technique_name": technique_name(value), "origin": "AI_SUGGESTION", "review_state": "SUGGESTED"}
+            for value in identifiers
+        ]}
+
+    def overview(self, org_id: UUID, investigation_id: UUID) -> dict:
+        """Return one deterministic, aggregate-only workspace projection.
+
+        All counts are correlated scalar subqueries in a single statement.
+        This avoids the legacy detail page's linearly-growing client fan-out
+        and does not load any evidence content or mutable authority fields.
+        """
+        from app.modules.ai_reasoning.infrastructure.intelligence_models import IntelligenceAnalysis
+        from app.modules.evidence.infrastructure.models import (
+            Entity, EntityRelationship, Event, EvidenceItem, IndicatorOccurrence, RawRecord,
+        )
+        from app.modules.investigations.infrastructure.models import Finding, MitreMapping
+
+        def count_for(model, *conditions):
+            return select(func.count()).select_from(model).where(*conditions).scalar_subquery()
+
+        evidence_ids = select(EvidenceItem.id).where(
+            EvidenceItem.org_id == org_id, EvidenceItem.investigation_id == investigation_id
+        )
+        row = self.db.execute(
+            select(
+                Investigation,
+                count_for(EvidenceItem, EvidenceItem.org_id == org_id, EvidenceItem.investigation_id == investigation_id).label("evidence_items"),
+                count_for(RawRecord, RawRecord.org_id == org_id, RawRecord.evidence_id.in_(evidence_ids)).label("raw_records"),
+                count_for(Event, Event.org_id == org_id, Event.investigation_id == investigation_id).label("events"),
+                count_for(Entity, Entity.org_id == org_id, Entity.investigation_id == investigation_id).label("entities"),
+                count_for(IndicatorOccurrence, IndicatorOccurrence.org_id == org_id, IndicatorOccurrence.investigation_id == investigation_id).label("indicator_occurrences"),
+                count_for(EntityRelationship, EntityRelationship.org_id == org_id, EntityRelationship.investigation_id == investigation_id).label("relationships"),
+                count_for(Finding, Finding.org_id == org_id, Finding.investigation_id == investigation_id).label("findings"),
+                count_for(MitreMapping, MitreMapping.org_id == org_id, MitreMapping.investigation_id == investigation_id, MitreMapping.status == "CONFIRMED").label("confirmed_mitre_mappings"),
+                count_for(IntelligenceAnalysis, IntelligenceAnalysis.org_id == org_id, IntelligenceAnalysis.investigation_id == investigation_id).label("intelligence_runs"),
+            ).where(Investigation.id == investigation_id, Investigation.org_id == org_id)
+        ).one_or_none()
+        if row is None:
+            raise NotFoundError("Investigation not found.")
+        investigation = row[0]
+        return {
+            "investigation": {
+                "id": investigation.id, "title": investigation.title[:255], "source": investigation.source[:100],
+                "severity": investigation.severity.value, "status": investigation.status.value,
+                "created_at": investigation.created_at, "updated_at": investigation.updated_at,
+            },
+            "counts": {
+                "evidence_items": row.evidence_items, "raw_records": row.raw_records, "events": row.events,
+                "entities": row.entities, "indicator_occurrences": row.indicator_occurrences,
+                "relationships": row.relationships, "findings": row.findings,
+                "confirmed_mitre_mappings": row.confirmed_mitre_mappings, "intelligence_runs": row.intelligence_runs,
+            },
+        }
 
     def create_alert_promotion_investigation(self, org_id: UUID, title: str, severity: Severity) -> Investigation:
         """Create a normal investigation for an explicitly approved alert promotion."""
@@ -79,12 +145,25 @@ class InvestigationService:
         investigation.status = new_status_enum
         return self.repo.save(investigation)
 
-    def add_note(self, org_id: UUID, investigation_id: UUID, author_id: UUID, body: str) -> Investigation:
+    def add_note(self, org_id: UUID, investigation_id: UUID, author_id: UUID, body: str) -> Note:
         investigation = self.get_investigation(org_id, investigation_id)
         note = Note(investigation_id=investigation.id, author_id=author_id, body=body)
         self.repo.add_note(note)
         self.db.flush()
-        return self.get_investigation(org_id, investigation_id)
+        return note
+
+    def list_notes(self, org_id: UUID, investigation_id: UUID, limit: int, offset: int) -> dict:
+        self.get_investigation(org_id, investigation_id)
+        where = (Note.investigation_id == investigation_id,)
+        total = self.db.scalar(select(func.count()).select_from(Note).where(*where)) or 0
+        rows = self.db.scalars(
+            select(Note).where(*where).order_by(Note.created_at.desc(), Note.id.desc()).limit(limit).offset(offset)
+        )
+        return {
+            "items": [{"id": str(note.id), "author_id": str(note.author_id), "body": note.body[:4000],
+                       "created_at": note.created_at, "updated_at": note.updated_at} for note in rows],
+            "limit": limit, "offset": offset, "total": total,
+        }
 
     def decide_action(self, org_id: UUID, action_id: UUID, approve: bool) -> Investigation:
         action = self.repo.get_action(org_id, action_id)
@@ -100,12 +179,40 @@ class InvestigationService:
         self.db.flush()
         return self.get_investigation(org_id, action.investigation_id)
 
-    def dashboard_summary(self, org_id: UUID) -> DashboardSummary:
+    @staticmethod
+    def resolve_dashboard_window(
+        preset: str | None, from_at: datetime | None, to_at: datetime | None, now: datetime | None = None
+    ) -> DashboardWindowRead | None:
+        if preset and (from_at is not None or to_at is not None):
+            raise ValidationError("A preset cannot be combined with a custom range.")
+        if preset:
+            duration = _DASHBOARD_PRESETS.get(preset)
+            if duration is None:
+                raise ValidationError("Unsupported dashboard window preset.")
+            end = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+            return DashboardWindowRead(preset=preset, from_at=end - duration, to_at=end)
+        if (from_at is None) != (to_at is None):
+            raise ValidationError("Both custom range boundaries are required.")
+        if from_at is None:
+            return None
+        if from_at.tzinfo is None or from_at.utcoffset() is None or to_at.tzinfo is None or to_at.utcoffset() is None:
+            raise ValidationError("Dashboard range timestamps must include a timezone.")
+        start, end = from_at.astimezone(timezone.utc), to_at.astimezone(timezone.utc)
+        if start > end:
+            raise ValidationError("Dashboard range start must not be later than its end.")
+        if end - start > _MAX_DASHBOARD_RANGE:
+            raise ValidationError("Dashboard range must not exceed 90 days.")
+        return DashboardWindowRead(from_at=start, to_at=end)
+
+    def dashboard_summary(self, org_id: UUID, window: DashboardWindowRead | None = None) -> DashboardSummary:
+        from_at = window.from_at if window else None
+        to_at = window.to_at if window else None
         return DashboardSummary(
-            open_investigations=self.repo.count_open(org_id),
-            critical_open=self.repo.count_critical_open(org_id),
-            avg_false_positive_probability=round(self.repo.avg_false_positive_probability(org_id), 1),
-            total_investigations=self.repo.count_by_org(org_id),
+            open_investigations=self.repo.count_open(org_id, from_at, to_at),
+            critical_open=self.repo.count_critical_open(org_id, from_at, to_at),
+            avg_false_positive_probability=round(self.repo.avg_false_positive_probability(org_id, from_at, to_at), 1),
+            total_investigations=self.repo.count_by_org(org_id, from_at=from_at, to_at=to_at),
+            window=window,
         )
 
     @staticmethod

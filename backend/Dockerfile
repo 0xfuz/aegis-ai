@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS base
+FROM python:3.12.7-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -16,7 +16,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 RUN chmod +x docker-entrypoint.sh
 
-RUN useradd --create-home --uid 1000 aegis && chown -R aegis:aegis /app
+RUN useradd --create-home --uid 1000 aegis \
+    && mkdir -p /app/storage/evidence \
+    && chown -R aegis:aegis /app
 USER aegis
 
 EXPOSE 8000

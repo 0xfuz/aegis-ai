@@ -18,6 +18,7 @@ from app.modules.evidence.infrastructure.models import Entity, EntityRelationshi
 from app.modules.identity.infrastructure.models import Organization
 from app.modules.investigations.infrastructure.models import Finding, Investigation, MitreMapping
 from app.shared.database import SessionLocal
+from tests.support.wazuh_webhook_fixture import create_wazuh_webhook_fixture, post_wazuh_webhook_event
 
 FIXTURES = Path(__file__).parent / "fixtures" / "wazuh"
 
@@ -28,13 +29,13 @@ def db():
     finally: session.rollback(); session.close()
 
 def setup(db):
-    suffix = uuid4().hex; org = Organization(name=f"Wazuh {suffix}", slug=f"wazuh-{suffix}"); db.add(org); db.commit()
-    created = ConnectorService(db).create_webhook_connector(org.id, f"wazuh-{suffix}", "http://testserver"); db.commit()
-    return org, created.connector, created.ingest_secret
+    fixture = create_wazuh_webhook_fixture(db)
+    return fixture.organization, fixture.connector, fixture.ingest_secret
 
 def payload(name): return json.loads((FIXTURES / name).read_text())
 def post(client, connector, secret, body, **kwargs):
-    return client.post(f"/api/v1/ingest/wazuh/v1/{connector.id}", json=body, headers={"X-Ingest-Secret": secret}, **kwargs)
+    from types import SimpleNamespace
+    return post_wazuh_webhook_event(client, SimpleNamespace(connector=connector, ingest_secret=secret), body, **kwargs)
 
 @pytest.mark.parametrize("name", ["windows_authentication.json", "linux_process.json", "network_event.json", "file_integrity.json", "sparse_valid.json"])
 def test_supported_wazuh_fixtures_ingest_to_v2_and_triage(db, name):
@@ -51,7 +52,7 @@ def test_raw_provenance_mitre_replay_and_no_authority_side_effects(db):
     alert = db.get(CanonicalAlert, first.json()["canonical_alert_id"]); raw = db.get(RawEvent, alert.raw_event_id)
     after = {m.__name__: db.scalar(select(func.count()).select_from(m).where(m.org_id == org.id)) for m in models}
     assert first.status_code == 201 and replay.status_code == 200 and replay.json()["status"] == "replayed"
-    assert raw.payload == body and alert.source_metadata["wazuh"]["mitre"]["id"] == ["T1543.003"] and after == before
+    assert raw.payload == body and alert.rule_id == str(body["rule"]["id"]) and alert.source_metadata["wazuh"]["mitre"]["id"] == ["T1543.003"] and after == before
     assert db.scalar(select(func.count()).select_from(CanonicalAlertOccurrence).where(CanonicalAlertOccurrence.canonical_alert_id == alert.id)) == 2
     assert db.scalar(select(func.count()).select_from(AlertClusterAssessment).where(AlertClusterAssessment.org_id == org.id)) == 1
 
@@ -71,3 +72,26 @@ def test_oversize_inactive_and_semantic_duplicate(db):
     org, connector, secret = setup(db); client = TestClient(app)
     assert client.post(f"/api/v1/ingest/wazuh/v1/{connector.id}", content=b"x" * (256 * 1024 + 1), headers={"X-Ingest-Secret": secret, "content-type": "application/json"}).status_code == 422
     db.get(Connector, connector.id).is_active = False; db.commit(); assert post(client, connector, secret, payload("sparse_valid.json")).status_code == 401
+
+
+def test_wazuh_distinct_ids_within_semantic_window_deduplicate_without_v1(db):
+    org, connector, secret = setup(db)
+    client = TestClient(app)
+    first = payload("sparse_valid.json")
+    first.update({"id": "r4-semantic-one", "timestamp": "2026-08-09T12:01:00+00:00", "agent": {"id": "001", "name": "r4-host"}})
+    duplicate = {**first, "id": "r4-semantic-two", "timestamp": "2026-08-09T12:01:30+00:00"}
+
+    accepted = post(client, connector, secret, first)
+    deduplicated = post(client, connector, secret, duplicate)
+
+    assert accepted.status_code == 201
+    assert deduplicated.status_code == 201
+    assert deduplicated.json()["deduplication_status"] == "SEMANTIC_DUPLICATE"
+    assert db.scalar(select(func.count()).select_from(AlertClusterMembership).where(
+        AlertClusterMembership.org_id == org.id,
+        AlertClusterMembership.correlation_version == CORRELATION_V2_VERSION,
+    )) == 1
+    assert db.scalar(select(func.count()).select_from(AlertClusterMembership).where(
+        AlertClusterMembership.org_id == org.id,
+        AlertClusterMembership.correlation_version == CORRELATION_VERSION,
+    )) == 0

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import InvestigationDetailPage from "@/app/(dashboard)/investigations/[id]/page";
@@ -14,7 +14,7 @@ vi.mock("next/link", () => ({ default: ({ href, children }: { href: string; chil
 vi.mock("@/lib/api-client", () => ({ apiFetch: state.apiFetch, ApiError: class ApiError extends Error {}, downloadFile: vi.fn() }));
 vi.mock("@/components/investigations/evidence-explorer", () => ({ EvidenceExplorer: () => null }));
 vi.mock("@/components/investigations/ioc-detail", () => ({ IOCDetailOverlay: () => null }));
-vi.mock("@/components/investigations/ai-reasoning-panel", () => ({ AIReasoningPanel: () => null }));
+vi.mock("@/components/investigations/ai-reasoning-panel", () => ({ AIReasoningPanel: ({ onAnalyze }: { onAnalyze: () => void }) => <button onClick={onAnalyze}>Queue intelligence</button> }));
 
 describe("legacy investigation detail navigation", () => {
   it("exposes the shared workspace routes for the current investigation", async () => {
@@ -33,5 +33,22 @@ describe("legacy investigation detail navigation", () => {
     expect(screen.getByRole("link", { name: "Attack Graph" })).toHaveAttribute("href", "/investigations/case-42/relationships");
     expect(screen.getByRole("link", { name: "View attack graph" })).toHaveAttribute("href", "/investigations/case-42/relationships");
     expect(screen.getByRole("link", { name: "Reports" })).toHaveAttribute("href", "/investigations/case-42/reports");
+  });
+
+  it("queues through the canonical run endpoint and never calls the retired synchronous route", async () => {
+    state.apiFetch.mockResolvedValue({
+      id: "case-42", title: "Insider Threat", source: "test", severity: "medium", status: "new", confidence: 0.5,
+      root_cause: "", mitre_techniques: [], blast_radius_summary: "", false_positive_probability: 0,
+      attack_chain: [], alternative_hypotheses: [], reasoning_chain: [], created_at: "2026-01-01T00:00:00Z",
+      timeline_events: [], evidence: [], evidence_records: [], notes: [], recommended_actions: [],
+    });
+    render(<InvestigationDetailPage />);
+    await screen.findByText("Insider Threat");
+    fireEvent.click(screen.getAllByRole("button", { name: "Queue intelligence" }).at(-1)!);
+    await vi.waitFor(() => expect(state.apiFetch).toHaveBeenCalledWith(
+      "/api/v1/investigations/case-42/intelligence/runs",
+      expect.objectContaining({ method: "POST", body: expect.stringMatching(/legacy-ui:/) }),
+    ));
+    expect(state.apiFetch.mock.calls.some(([url]) => String(url).endsWith("/analyze"))).toBe(false);
   });
 });
