@@ -1,0 +1,394 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100" role="img" aria-labelledby="title desc">
+  <title id="title">Aegis AI — System and Data-Flow Architecture</title>
+  <desc id="desc">Authorized telemetry enters Aegis AI through authenticated Wazuh or generic ingestion paths, becomes canonical alerts, passes deterministic deduplication, correlation version 2, triage version 1, and analyst-controlled promotion into an investigation. PostgreSQL is authoritative, Redis is rebuildable infrastructure, and the optional local AI path creates reviewable claims only.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07101d"/>
+      <stop offset="0.55" stop-color="#0a1424"/>
+      <stop offset="1" stop-color="#07101d"/>
+    </linearGradient>
+    <linearGradient id="aegisGlow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0ea5e9"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#23324a" opacity="0.48"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8" result="blur"/>
+      <feOffset in="blur" dx="0" dy="8" result="offsetBlur"/>
+      <feFlood flood-color="#000814" flood-opacity="0.48" result="shadowColor"/>
+      <feComposite in="shadowColor" in2="offsetBlur" operator="in" result="shadowLayer"/>
+      <feMerge>
+        <feMergeNode in="shadowLayer"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L12,6 L0,12 z" fill="#7dd3fc"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L12,6 L0,12 z" fill="#2dd4bf"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L12,6 L0,12 z" fill="#c084fc"/>
+    </marker>
+    <style>
+      .title { font: 700 34px Inter,Segoe UI,Arial,sans-serif; fill:#f8fafc; letter-spacing:1.2px }
+      .subtitle { font: 400 15px Inter,Segoe UI,Arial,sans-serif; fill:#91a4bd }
+      .zone-title { font: 700 13px Inter,Segoe UI,Arial,sans-serif; letter-spacing:1.6px }
+      .node-title { font: 700 17px Inter,Segoe UI,Arial,sans-serif; fill:#f1f5f9 }
+      .node-title-sm { font: 700 15px Inter,Segoe UI,Arial,sans-serif; fill:#f1f5f9 }
+      .node-sub { font: 400 12px Inter,Segoe UI,Arial,sans-serif; fill:#94a3b8 }
+      .tiny { font: 500 11px Inter,Segoe UI,Arial,sans-serif; fill:#9fb0c5; letter-spacing:.3px }
+      .label { font: 600 11px Inter,Segoe UI,Arial,sans-serif; fill:#cbd5e1 }
+      .chip { font: 700 10px Inter,Segoe UI,Arial,sans-serif; letter-spacing:.8px }
+      .center { text-anchor:middle }
+      .node { fill:#111c2d; stroke:#334155; stroke-width:1.4 }
+      .node-blue { fill:#0d2033; stroke:#38bdf8; stroke-width:1.6 }
+      .node-green { fill:#0c2627; stroke:#2dd4bf; stroke-width:1.6 }
+      .node-purple { fill:#201630; stroke:#a855f7; stroke-width:1.6 }
+      .node-orange { fill:#2a1d12; stroke:#fb923c; stroke-width:1.6 }
+      .solid-flow { fill:none; stroke:#7dd3fc; stroke-width:2.4; marker-end:url(#arrow) }
+      .green-flow { fill:none; stroke:#2dd4bf; stroke-width:2.4; marker-end:url(#arrowGreen) }
+      .optional-flow { fill:none; stroke:#c084fc; stroke-width:2.2; stroke-dasharray:8 8; marker-end:url(#arrowPurple) }
+      .data-flow { fill:none; stroke:#64748b; stroke-width:1.8; marker-end:url(#arrow) }
+      .solid-flow, .green-flow, .optional-flow, .data-flow {
+        stroke-dasharray: 14 9;
+        animation: liveDash 1.35s linear infinite;
+      }
+      .optional-flow { stroke-dasharray: 8 8; animation-duration: 1.8s }
+      .node-blue { animation: bluePulse 3.2s ease-in-out infinite }
+      .node-green { animation: greenPulse 3.2s ease-in-out infinite .45s }
+      .node-purple { animation: purplePulse 3.2s ease-in-out infinite .9s }
+      .flow-dot {
+        filter:url(#softGlow);
+        opacity:0;
+        animation:dotReveal 1.8s ease-in-out infinite;
+      }
+      .live-status { animation: statusPulse 1.8s ease-in-out infinite }
+      @keyframes liveDash { to { stroke-dashoffset:-46 } }
+      @keyframes bluePulse { 0%,100% { stroke-opacity:.65 } 50% { stroke-opacity:1 } }
+      @keyframes greenPulse { 0%,100% { stroke-opacity:.62 } 50% { stroke-opacity:1 } }
+      @keyframes purplePulse { 0%,100% { stroke-opacity:.58 } 50% { stroke-opacity:1 } }
+      @keyframes statusPulse { 0%,100% { opacity:.45 } 50% { opacity:1 } }
+      @keyframes dotReveal {
+        0%,5%,100% { opacity:0 }
+        15%,88% { opacity:1 }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .solid-flow, .green-flow, .optional-flow, .data-flow,
+        .node-blue, .node-green, .node-purple, .live-status { animation:none }
+      }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1100" fill="url(#bg)"/>
+  <rect width="1800" height="1100" fill="url(#grid)"/>
+
+  <!-- Header -->
+  <g transform="translate(62 58)">
+    <polygon points="0,18 16,4 36,10 40,32 20,47 2,36" fill="none" stroke="url(#aegisGlow)" stroke-width="4" filter="url(#softGlow)"/>
+    <circle cx="20" cy="25" r="5" fill="#38bdf8"/>
+    <text x="58" y="26" class="title">AEGIS AI — SYSTEM &amp; DATA-FLOW ARCHITECTURE</text>
+    <text x="59" y="50" class="subtitle">Self-hosted · evidence-first · analyst-controlled · organization-scoped</text>
+  </g>
+  <g transform="translate(1480 56)">
+    <rect width="256" height="42" rx="21" fill="#0d2033" stroke="#24557a"/>
+    <circle class="live-status" cx="22" cy="21" r="5" fill="#2dd4bf"/>
+    <text x="38" y="26" class="label">CONTROLLED DEPLOYMENT</text>
+  </g>
+
+  <!-- Zones -->
+  <rect x="45" y="135" width="325" height="850" rx="26" fill="#0b1c2b" fill-opacity=".52" stroke="#25638b" stroke-width="1.5" stroke-dasharray="9 8"/>
+  <rect x="395" y="135" width="300" height="850" rx="26" fill="#10212a" fill-opacity=".58" stroke="#238b83" stroke-width="1.5" stroke-dasharray="9 8"/>
+  <rect x="720" y="115" width="710" height="890" rx="28" fill="#0b1725" fill-opacity=".78" stroke="#2796bd" stroke-width="2"/>
+  <rect x="1455" y="135" width="300" height="850" rx="26" fill="#181329" fill-opacity=".58" stroke="#7e4bb2" stroke-width="1.5" stroke-dasharray="9 8"/>
+
+  <g transform="translate(66 151)"><rect width="187" height="28" rx="14" fill="#102f49"/><text x="93.5" y="19" class="zone-title center" fill="#7dd3fc">TELEMETRY SOURCES</text></g>
+  <g transform="translate(416 151)"><rect width="212" height="28" rx="14" fill="#103532"/><text x="106" y="19" class="zone-title center" fill="#5eead4">INTEGRATION BOUNDARY</text></g>
+  <g transform="translate(743 132)"><rect width="126" height="28" rx="14" fill="#10324a"/><text x="63" y="19" class="zone-title center" fill="#7dd3fc">AEGIS AI CORE</text></g>
+  <g transform="translate(1477 151)"><rect width="220" height="28" rx="14" fill="#2a1942"/><text x="110" y="19" class="zone-title center" fill="#d8b4fe">ANALYST &amp; OPTIONAL AI</text></g>
+
+  <!-- Telemetry sources -->
+  <g filter="url(#shadow)">
+    <rect x="82" y="225" width="250" height="112" rx="18" class="node-blue"/>
+    <rect x="101" y="244" width="52" height="52" rx="14" fill="#123954"/>
+    <path d="M114 258h26v19h-26z M121 282h12 M127 277v5" fill="none" stroke="#7dd3fc" stroke-width="2.4" stroke-linecap="round"/>
+    <text x="246" y="263" class="node-title-sm center">Protected Endpoints</text>
+    <text x="246" y="285" class="node-sub center">Wazuh agents</text>
+    <text x="246" y="306" class="tiny center">Hosts · servers · workloads</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="82" y="420" width="250" height="122" rx="18" class="node-blue"/>
+    <rect x="101" y="441" width="52" height="52" rx="14" fill="#123954"/>
+    <path d="M115 457h24v6h-24z M115 468h24v6h-24z M115 479h24v6h-24z" fill="none" stroke="#38bdf8" stroke-width="2"/>
+    <text x="242" y="458" class="node-title center">Wazuh Manager</text>
+    <text x="242" y="480" class="node-sub center">Validated: v4.9.2</text>
+    <text x="242" y="502" class="tiny center">Validated external integration</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="82" y="690" width="250" height="112" rx="18" class="node"/>
+    <rect x="101" y="709" width="52" height="52" rx="14" fill="#182840"/>
+    <path d="M113 728l14-8 14 8-14 8z M113 740l14 8 14-8" fill="none" stroke="#94a3b8" stroke-width="2.2" stroke-linejoin="round"/>
+    <text x="242" y="727" class="node-title center">Generic Sources</text>
+    <text x="242" y="749" class="node-sub center">Scoped connectors</text>
+    <text x="242" y="770" class="tiny center">Authorized telemetry only</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="82" y="842" width="250" height="94" rx="18" class="node"/>
+    <rect x="101" y="861" width="52" height="52" rx="14" fill="#182840"/>
+    <path d="M117 876h20v24h-20z M121 871h12v7" fill="none" stroke="#94a3b8" stroke-width="2.2"/>
+    <text x="242" y="875" class="node-title center">Evidence Upload</text>
+    <text x="242" y="898" class="node-sub center">Authorized workflow</text>
+  </g>
+
+  <path d="M207 337V420" class="solid-flow"/>
+  <g transform="translate(222 368)"><rect width="76" height="23" rx="11" fill="#0d2033" stroke="#24557a"/><text x="12" y="16" class="chip" fill="#7dd3fc">ALERTS</text></g>
+
+  <!-- Integration boundary -->
+  <g filter="url(#shadow)">
+    <rect x="433" y="350" width="225" height="142" rx="20" class="node-green"/>
+    <rect x="453" y="371" width="54" height="54" rx="15" fill="#103b39"/>
+    <path d="M466 391h28 M470 383l-8 8 8 8 M490 383l8 8-8 8" fill="none" stroke="#5eead4" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="583" y="383" class="node-title center">Wazuh TLS</text>
+    <text x="583" y="403" class="node-title center">Forwarder</text>
+    <text x="583" y="424" class="node-sub center">Authenticated ingestion</text>
+    <text x="545.5" y="451" class="tiny center">Operator-configured component</text>
+    <text x="545.5" y="470" class="tiny center">Separate trust boundary</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="433" y="665" width="225" height="118" rx="20" class="node-green"/>
+    <rect x="453" y="687" width="54" height="54" rx="15" fill="#103b39"/>
+    <path d="M467 700l13 13-13 13 M493 700l-13 13 13 13" fill="none" stroke="#5eead4" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="583" y="700" class="node-title center">Generic Alert</text>
+    <text x="583" y="721" class="node-title center">Webhook</text>
+    <text x="583" y="743" class="node-sub center">Org-scoped ingestion</text>
+    <text x="545.5" y="765" class="tiny center">Authenticate · validate · normalize</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="433" y="840" width="225" height="96" rx="20" class="node-green"/>
+    <rect x="453" y="860" width="54" height="54" rx="15" fill="#103b39"/>
+    <path d="M469 872h22v28h-22z M474 879h12 M474 886h12 M474 893h8" fill="none" stroke="#5eead4" stroke-width="2.1"/>
+    <text x="583" y="875" class="node-title center">Evidence API</text>
+    <text x="583" y="899" class="node-sub center">Provenance retained</text>
+  </g>
+
+  <path d="M332 481H394 Q415 481 433 421" class="green-flow"/>
+  <g transform="translate(347 437)"><rect width="88" height="23" rx="11" fill="#103532" stroke="#238b83"/><text x="12" y="16" class="chip" fill="#5eead4">mTLS / TLS</text></g>
+  <path d="M332 746H433" class="green-flow"/>
+  <path d="M332 889H433" class="green-flow"/>
+
+  <!-- Aegis entry -->
+  <g filter="url(#shadow)">
+    <rect x="770" y="205" width="270" height="128" rx="21" class="node-blue"/>
+    <rect x="792" y="227" width="56" height="56" rx="16" fill="#123954"/>
+    <path d="M806 240h28v30h-28z M812 247h16 M812 254h16 M812 261h10" fill="none" stroke="#7dd3fc" stroke-width="2.2"/>
+    <text x="941" y="244" class="node-title center">FastAPI Backend</text>
+    <text x="941" y="267" class="node-sub center">Organization-scoped API</text>
+    <text x="905" y="309" class="tiny center">Authenticate · validate · normalize</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1090" y="205" width="292" height="128" rx="21" class="node-blue"/>
+    <rect x="1112" y="227" width="56" height="56" rx="16" fill="#123954"/>
+    <path d="M1124 242h32v24h-32z M1133 270h14 M1140 266v4" fill="none" stroke="#7dd3fc" stroke-width="2.2" stroke-linecap="round"/>
+    <text x="1273" y="244" class="node-title center">Next.js Frontend</text>
+    <text x="1273" y="267" class="node-sub center">Investigation workspace</text>
+    <text x="1236" y="309" class="tiny center">Presentation only · no recomputation</text>
+  </g>
+
+  <path d="M1040 269H1090" class="solid-flow"/>
+  <path d="M1090 294H1040" fill="none" stroke="#7dd3fc" stroke-width="1.8" marker-end="url(#arrow)"/>
+
+  <!-- Canonical pipeline -->
+  <g filter="url(#shadow)">
+    <rect x="770" y="390" width="612" height="190" rx="23" fill="#0c1d2e" stroke="#2b7798" stroke-width="1.6"/>
+    <text x="797" y="426" class="zone-title" fill="#7dd3fc">ALERT-TO-INVESTIGATION PIPELINE</text>
+    <g transform="translate(798 459)">
+      <rect width="100" height="72" rx="14" fill="#11283b" stroke="#3b82a8"/><text x="50" y="31" text-anchor="middle" class="label">Canonical</text><text x="50" y="49" text-anchor="middle" class="label">Alert</text>
+      <rect x="116" width="100" height="72" rx="14" fill="#11283b" stroke="#3b82a8"/><text x="166" y="31" text-anchor="middle" class="label">Deterministic</text><text x="166" y="49" text-anchor="middle" class="label">Deduplication</text>
+      <rect x="232" width="100" height="72" rx="14" fill="#11283b" stroke="#3b82a8"/><text x="282" y="31" text-anchor="middle" class="label">Correlation</text><text x="282" y="49" text-anchor="middle" class="label">v2</text>
+      <rect x="348" width="100" height="72" rx="14" fill="#11283b" stroke="#3b82a8"/><text x="398" y="31" text-anchor="middle" class="label">Triage</text><text x="398" y="49" text-anchor="middle" class="label">v1</text>
+      <rect x="464" width="120" height="72" rx="14" fill="#0c302f" stroke="#2dd4bf"/><text x="524" y="31" text-anchor="middle" class="label">Analyst</text><text x="524" y="49" text-anchor="middle" class="label">Promotion</text>
+      <path d="M100 36h16 M216 36h16 M332 36h16 M448 36h16" class="green-flow"/>
+    </g>
+    <text x="798" y="558" class="tiny">Deterministic processing · persisted correlation reasons · analyst-controlled promotion</text>
+  </g>
+
+  <path d="M905 333V390" class="solid-flow"/>
+  <path d="M658 421H715 Q745 421 770 255" class="green-flow"/>
+  <path d="M658 724H708 Q742 724 770 300" class="green-flow"/>
+  <path d="M658 888H723 Q750 888 770 318" class="green-flow"/>
+
+  <!-- Investigation services -->
+  <g filter="url(#shadow)">
+    <rect x="770" y="630" width="390" height="150" rx="22" class="node-green"/>
+    <rect x="792" y="652" width="58" height="58" rx="16" fill="#103b39"/>
+    <circle cx="821" cy="681" r="16" fill="none" stroke="#5eead4" stroke-width="2.2"/>
+    <path d="M821 664v34 M804 681h34" stroke="#5eead4" stroke-width="2" opacity=".7"/>
+    <text x="1005" y="672" class="node-title center">Persisted Investigation</text>
+    <text x="1005" y="697" class="node-sub center">Evidence · Raw records · Timeline</text>
+    <text x="965" y="739" class="tiny center">Entities · Indicators · Relationships · Findings · confirmed MITRE</text>
+    <text x="965" y="761" class="tiny center">Attack graph · Notes · Reports · Audit trail</text>
+  </g>
+
+  <g id="context-builder" filter="url(#shadow)">
+    <rect x="1190" y="630" width="192" height="150" rx="22" class="node-purple"/>
+    <rect x="1212" y="652" width="54" height="54" rx="16" fill="#35204e"/>
+    <path d="M1223 681h32 M1239 665v32 M1228 670l22 22 M1250 670l-22 22" stroke="#d8b4fe" stroke-width="2" opacity=".9"/>
+    <text x="1322" y="672" class="node-title center">Context</text>
+    <text x="1322" y="694" class="node-title center">Builder</text>
+    <text x="1286" y="734" class="tiny center">Bounded · redacted</text>
+    <text x="1286" y="755" class="tiny center">Deterministic snapshot</text>
+  </g>
+
+  <path d="M1077 580V630" class="green-flow"/>
+  <path d="M1160 705H1190" class="optional-flow"/>
+
+  <!-- Data layer -->
+  <g filter="url(#shadow)">
+    <rect x="770" y="835" width="286" height="120" rx="20" class="node-orange"/>
+    <ellipse cx="820" cy="873" rx="24" ry="10" fill="none" stroke="#fbbf24" stroke-width="2.3"/>
+    <path d="M796 873v38c0 6 11 10 24 10s24-4 24-10v-38 M796 892c0 6 11 10 24 10s24-4 24-10" fill="none" stroke="#fbbf24" stroke-width="2.3"/>
+    <text x="950" y="872" class="node-title center">PostgreSQL 16</text>
+    <text x="950" y="896" class="node-sub center">Authoritative system of record</text>
+    <text x="950" y="919" class="tiny center">Facts · identity · state · audit</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1090" y="835" width="292" height="120" rx="20" class="node-orange"/>
+    <rect x="1115" y="860" width="48" height="48" rx="13" fill="#442318"/>
+    <path d="M1124 875l15-7 15 7-15 7z M1124 884l15 7 15-7 M1124 894l15 7 15-7" fill="none" stroke="#fb923c" stroke-width="2"/>
+    <text x="1270" y="872" class="node-title center">Redis 7</text>
+    <text x="1270" y="896" class="node-sub center">Non-authoritative state</text>
+    <text x="1270" y="919" class="tiny center">Cache · queue · rebuildable</text>
+  </g>
+
+  <path d="M920 780V835" class="data-flow"/>
+  <path d="M1040 780Q1110 814 1236 835" class="data-flow"/>
+
+  <!-- Operator and AI -->
+  <g filter="url(#shadow)">
+    <rect x="1490" y="225" width="230" height="128" rx="20" class="node-blue"/>
+    <rect x="1512" y="247" width="54" height="54" rx="16" fill="#123954"/>
+    <path d="M1525 260h28v22h-28z M1532 286h14 M1539 282v4" fill="none" stroke="#7dd3fc" stroke-width="2.2"/>
+    <text x="1644" y="264" class="node-title-sm center">Analyst Browser</text>
+    <text x="1644" y="287" class="node-sub center">Review and decision</text>
+    <text x="1605" y="326" class="tiny center">Confirm · reject · review history</text>
+  </g>
+
+  <g id="intelligence-worker" filter="url(#shadow)">
+    <rect x="1490" y="470" width="230" height="140" rx="20" class="node-purple"/>
+    <rect x="1512" y="492" width="54" height="54" rx="16" fill="#35204e"/>
+    <circle cx="1539" cy="519" r="16" fill="none" stroke="#d8b4fe" stroke-width="2.2"/>
+    <path d="M1529 519h20 M1539 509v20" stroke="#d8b4fe" stroke-width="2"/>
+    <text x="1641" y="501" class="node-title center">Intelligence</text>
+    <text x="1641" y="522" class="node-title center">Worker</text>
+    <text x="1641" y="544" class="node-sub center">Opt-in run execution</text>
+    <text x="1605" y="572" class="tiny center">IntelligenceAnalysis run</text>
+    <text x="1605" y="592" class="tiny center">IntelligenceItem claims · lineage</text>
+  </g>
+
+  <g id="ollama-provider" filter="url(#shadow)">
+    <rect x="1490" y="690" width="230" height="140" rx="20" class="node-purple"/>
+    <rect x="1512" y="712" width="54" height="54" rx="16" fill="#35204e"/>
+    <circle cx="1539" cy="739" r="16" fill="none" stroke="#d8b4fe" stroke-width="2.2"/>
+    <circle cx="1533" cy="735" r="2.5" fill="#d8b4fe"/><circle cx="1545" cy="735" r="2.5" fill="#d8b4fe"/>
+    <path d="M1530 745q9 8 18 0" fill="none" stroke="#d8b4fe" stroke-width="2"/>
+    <text x="1641" y="726" class="node-title center">Ollama Runtime</text>
+    <text x="1641" y="749" class="node-sub center">Local model provider</text>
+    <text x="1605" y="791" class="tiny center">Explicitly enabled profile</text>
+    <text x="1605" y="811" class="tiny center">Reviewable suggestions only</text>
+  </g>
+
+  <path d="M1382 269H1490" class="solid-flow"/>
+  <g transform="translate(1397 234)"><rect width="78" height="23" rx="11" fill="#0d2033" stroke="#24557a"/><text x="12" y="16" class="chip" fill="#7dd3fc">HTTPS</text></g>
+  <path d="M1382 705Q1450 690 1490 540" class="optional-flow"/>
+  <path d="M1585 610V690" class="optional-flow"/>
+  <path d="M1625 690V610" class="optional-flow"/>
+  <g transform="translate(1618 636)"><rect width="78" height="23" rx="11" fill="#2a1942" stroke="#7e4bb2"/><text x="12" y="16" class="chip" fill="#d8b4fe">OPTIONAL</text></g>
+  <path d="M1490 520Q1398 590 1160 680" fill="none" stroke="#c084fc" stroke-width="1.9" stroke-dasharray="7 7" marker-end="url(#arrowPurple)"/>
+  <g transform="translate(1340 557)"><rect width="116" height="23" rx="11" fill="#2a1942" stroke="#7e4bb2"/><text x="12" y="16" class="chip" fill="#d8b4fe">PERSIST CLAIMS</text></g>
+
+  <!-- Live telemetry particles -->
+  <g aria-label="Animated telemetry flow">
+    <path id="motion-endpoint-wazuh" d="M207 337V420" fill="none" stroke="none"/>
+    <path id="motion-wazuh-tls" d="M332 481H394 Q415 481 433 421" fill="none" stroke="none"/>
+    <path id="motion-tls-api" d="M658 421H715 Q745 421 770 255" fill="none" stroke="none"/>
+    <path id="motion-webhook-api" d="M658 724H708 Q742 724 770 300" fill="none" stroke="none"/>
+    <path id="motion-evidence-api" d="M658 888H723 Q750 888 770 318" fill="none" stroke="none"/>
+    <path id="motion-api-pipeline" d="M905 333V390" fill="none" stroke="none"/>
+    <path id="motion-pipeline-investigation" d="M1077 580V630" fill="none" stroke="none"/>
+    <path id="motion-investigation-db" d="M920 780V835" fill="none" stroke="none"/>
+    <path id="motion-api-frontend" d="M1040 269H1090" fill="none" stroke="none"/>
+    <path id="motion-frontend-analyst" d="M1382 269H1490" fill="none" stroke="none"/>
+    <path id="motion-context-worker" d="M1382 705Q1450 690 1490 540" fill="none" stroke="none"/>
+    <path id="motion-worker-ollama" d="M1585 610V690" fill="none" stroke="none"/>
+    <path id="motion-ollama-worker" d="M1625 690V610" fill="none" stroke="none"/>
+    <path id="motion-worker-investigation" d="M1490 520Q1398 590 1160 680" fill="none" stroke="none"/>
+
+    <circle class="flow-dot" r="6" fill="#7dd3fc">
+      <animateMotion dur="1.7s" repeatCount="indefinite"><mpath href="#motion-endpoint-wazuh"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="6" fill="#2dd4bf">
+      <animateMotion dur="2.1s" begin=".2s" repeatCount="indefinite"><mpath href="#motion-wazuh-tls"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="6" fill="#2dd4bf">
+      <animateMotion dur="2.5s" begin=".5s" repeatCount="indefinite"><mpath href="#motion-tls-api"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="5" fill="#2dd4bf">
+      <animateMotion dur="2.8s" begin="1.1s" repeatCount="indefinite"><mpath href="#motion-webhook-api"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="5" fill="#2dd4bf">
+      <animateMotion dur="3s" begin="1.8s" repeatCount="indefinite"><mpath href="#motion-evidence-api"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="6" fill="#7dd3fc">
+      <animateMotion dur="1.5s" begin=".7s" repeatCount="indefinite"><mpath href="#motion-api-pipeline"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="6" fill="#2dd4bf">
+      <animateMotion dur="1.7s" begin="1.1s" repeatCount="indefinite"><mpath href="#motion-pipeline-investigation"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="6" fill="#fbbf24">
+      <animateMotion dur="1.6s" begin="1.5s" repeatCount="indefinite"><mpath href="#motion-investigation-db"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="5" fill="#7dd3fc">
+      <animateMotion dur="1.4s" begin=".4s" repeatCount="indefinite"><mpath href="#motion-api-frontend"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="6" fill="#7dd3fc">
+      <animateMotion dur="1.8s" begin=".9s" repeatCount="indefinite"><mpath href="#motion-frontend-analyst"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="6" fill="#c084fc">
+      <animateMotion dur="2.4s" begin=".6s" repeatCount="indefinite"><mpath href="#motion-context-worker"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="6" fill="#c084fc">
+      <animateMotion dur="1.9s" begin="1.2s" repeatCount="indefinite"><mpath href="#motion-worker-ollama"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="5" fill="#c084fc">
+      <animateMotion dur="1.9s" begin=".4s" repeatCount="indefinite"><mpath href="#motion-ollama-worker"/></animateMotion>
+    </circle>
+    <circle class="flow-dot" r="5" fill="#c084fc">
+      <animateMotion dur="2.3s" begin="1.3s" repeatCount="indefinite"><mpath href="#motion-worker-investigation"/></animateMotion>
+    </circle>
+  </g>
+
+  <!-- Footer legend -->
+  <g transform="translate(52 1024)">
+    <rect width="1696" height="48" rx="18" fill="#0b1626" stroke="#25344b"/>
+    <line x1="26" y1="24" x2="72" y2="24" stroke="#7dd3fc" stroke-width="2.4" marker-end="url(#arrow)"/>
+    <text x="84" y="29" class="label">Authoritative application flow</text>
+    <line x1="330" y1="24" x2="376" y2="24" stroke="#c084fc" stroke-width="2.2" stroke-dasharray="8 8" marker-end="url(#arrowPurple)"/>
+    <text x="388" y="29" class="label">Optional AI boundary</text>
+    <circle cx="622" cy="24" r="5" fill="#fbbf24"/><text x="636" y="29" class="label">Persistent data layer</text>
+    <text x="880" y="29" class="tiny">Independent project · Wazuh 4.9.2 is the validated external integration · AI output is never authoritative.</text>
+  </g>
+</svg>
